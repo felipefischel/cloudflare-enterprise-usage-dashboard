@@ -1,0 +1,32 @@
+{
+  "name": "cloudflare-enterprise-usage-dashboard",
+  "version": "1.0.0",
+  "description": "Enterprise Usage Dashboard for Cloudflare customers",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "deploy": "npm run build && wrangler deploy",
+    "wrangler": "wrangler"
+  },
+  "dependencies": {
+    "date-fns": "^3.0.0",
+    "lucide-react": "^0.294.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "recharts": "^2.10.3"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20231218.0",
+    "@types/react": "^18.2.45",
+    "@types/react-dom": "^18.2.18",
+    "@vitejs/plugin-react": "^4.2.1",
+    "autoprefixer": "^10.4.16",
+    "postcss": "^8.4.32",
+    "tailwindcss": "^3.4.0",
+    "typescript": "^5.3.3",
+    "vite": "^5.0.8",
+    "wrangler": "^4.42.0"
+  }
+}
