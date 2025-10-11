@@ -103,13 +103,20 @@ function parseAccountIds(body) {
 async function getMetrics(request, env, corsHeaders) {
   const body = await request.json();
   
-  // API Token: Prefer secret over KV (secondary option for enhanced security)
-  const apiKey = env.CLOUDFLARE_API_TOKEN || body.apiKey;
-  // Account IDs: Always from KV/UI (supports multi-account)
+  // API Token: Read from wrangler secret (secure storage)
+  const apiKey = env.CLOUDFLARE_API_TOKEN;
+  // Account IDs: From KV/UI (supports multi-account)
   const accountIds = parseAccountIds(body);
 
-  if (!apiKey || accountIds.length === 0) {
-    return new Response(JSON.stringify({ error: 'API credentials not configured. Please configure them in Settings.' }), {
+  if (!apiKey) {
+    return new Response(JSON.stringify({ error: 'API token not configured. Set it using: npx wrangler secret put CLOUDFLARE_API_TOKEN' }), {
+      status: 400,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  }
+
+  if (accountIds.length === 0) {
+    return new Response(JSON.stringify({ error: 'Account IDs not configured. Please configure them in Settings.' }), {
       status: 400,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
@@ -939,13 +946,20 @@ function aggregateAccountMetrics(accountMetrics) {
 async function getZones(request, env, corsHeaders) {
   const body = await request.json();
   
-  // API Token: Prefer secret over KV (secondary option for enhanced security)
-  const apiKey = env.CLOUDFLARE_API_TOKEN || body.apiKey;
-  // Account IDs: Always from KV/UI (supports multi-account)
+  // API Token: Read from wrangler secret (secure storage)
+  const apiKey = env.CLOUDFLARE_API_TOKEN;
+  // Account IDs: From KV/UI (supports multi-account)
   const accountIds = parseAccountIds(body);
 
-  if (!apiKey || accountIds.length === 0) {
-    return new Response(JSON.stringify({ error: 'API credentials not configured. Please configure them in Settings.' }), {
+  if (!apiKey) {
+    return new Response(JSON.stringify({ error: 'API token not configured. Set it using: npx wrangler secret put CLOUDFLARE_API_TOKEN' }), {
+      status: 400,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  }
+
+  if (accountIds.length === 0) {
+    return new Response(JSON.stringify({ error: 'Account IDs not configured. Please configure them in Settings.' }), {
       status: 400,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
@@ -1410,11 +1424,18 @@ async function getHistoricalMonthlyData(env, accountId) {
  */
 async function testFirewallQuery(request, env, corsHeaders) {
   const body = await request.json();
-  const apiKey = env.CLOUDFLARE_API_TOKEN || body.apiKey;
-  const accountId = body.accountId;  // Always from request body/KV
+  const apiKey = env.CLOUDFLARE_API_TOKEN;
+  const accountId = body.accountId;  // From request body/KV
   
-  if (!apiKey || !accountId) {
-    return new Response(JSON.stringify({ error: 'API credentials required' }), {
+  if (!apiKey) {
+    return new Response(JSON.stringify({ error: 'API token not configured. Set it using: npx wrangler secret put CLOUDFLARE_API_TOKEN' }), {
+      status: 400,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  }
+
+  if (!accountId) {
+    return new Response(JSON.stringify({ error: 'Account ID required' }), {
       status: 400,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
@@ -1577,12 +1598,17 @@ async function runScheduledThresholdCheck(env) {
       return;
     }
 
-    // API Token: Prefer secret over KV (same as API endpoints)
-    const apiKey = env.CLOUDFLARE_API_TOKEN || config.apiKey;
+    // API Token: Read from wrangler secret (secure storage)
+    const apiKey = env.CLOUDFLARE_API_TOKEN;
     const accountIds = config.accountIds || (config.accountId ? [config.accountId] : []);
     
-    if (accountIds.length === 0 || !apiKey) {
-      console.log('Scheduled check: Missing account IDs or API key');
+    if (!apiKey) {
+      console.log('Scheduled check: API token not configured');
+      return;
+    }
+
+    if (accountIds.length === 0) {
+      console.log('Scheduled check: No account IDs configured');
       return;
     }
 

@@ -165,7 +165,7 @@ function App() {
                   <div>
                     <h3 className="text-sm font-bold text-yellow-800 mb-2">⚠️ Important Disclaimer</h3>
                     <p className="text-sm text-yellow-700">
-                      <strong>This is NOT an official Cloudflare tool.</strong> This dashboard is a solution designed to help Enterprise customers track their usage. Official billing data from Cloudflare may vary from the metrics shown here. Always refer to your official Cloudflare invoices and account dashboard for authoritative usage information.
+                      <strong>This is NOT an official Cloudflare tool.</strong> Official billing data from Cloudflare may vary from the metrics shown here. Always refer to your official Cloudflare invoices and account dashboard for authoritative usage information.
                     </p>
                   </div>
                 </div>
