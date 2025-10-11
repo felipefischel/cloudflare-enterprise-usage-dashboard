@@ -386,12 +386,77 @@ async function fetchAccountMetrics(apiKey, accountId, env) {
   // Calculate clean traffic (billable requests = total - blocked)
   currentMonthTotal.cleanRequests = currentMonthTotal.totalRequests - currentMonthTotal.blockedRequests;
 
-  // Fetch DNS queries for each zone
+  // Fetch blocked requests and DNS queries for each zone
   try {
     const datetimeStart = currentMonthStart.toISOString();
     const datetimeEnd = currentMonthEnd.toISOString();
     
     for (const zoneMetric of zoneMetrics) {
+      // Fetch blocked requests for this zone
+      try {
+        const blockedZoneQuery = {
+          operationName: 'GetZoneBlockedRequests',
+          variables: {
+            zoneTag: zoneMetric.zoneTag,
+            filter: {
+              AND: [
+                {
+                  datetime_geq: datetimeStart,
+                  datetime_leq: datetimeEnd,
+                  requestSource: 'eyeball'
+                },
+                {
+                  OR: [
+                    { securityAction: 'block' },
+                    { securityAction: 'challenge' },
+                    { securityAction: 'jschallenge' },
+                    { securityAction: 'connection_close' },
+                    { securityAction: 'challenge_failed' },
+                    { securityAction: 'jschallenge_failed' },
+                    { securityAction: 'force_connection_close' },
+                    { securityAction: 'managed_challenge' },
+                    { securityAction: 'managed_challenge_failed' }
+                  ]
+                }
+              ]
+            }
+          },
+          query: `query GetZoneBlockedRequests($zoneTag: string, $filter: ZoneHttpRequestsAdaptiveGroupsFilter_InputObject) {
+            viewer {
+              zones(filter: {zoneTag: $zoneTag}) {
+                total: httpRequestsAdaptiveGroups(filter: $filter, limit: 1) {
+                  count
+                }
+              }
+            }
+          }`
+        };
+
+        const blockedZoneResponse = await fetch('https://api.cloudflare.com/client/v4/graphql', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify(blockedZoneQuery),
+        });
+
+        const blockedZoneData = await blockedZoneResponse.json();
+        
+        if (blockedZoneResponse.ok && blockedZoneData.data?.viewer?.zones?.[0]?.total?.[0]?.count) {
+          zoneMetric.blockedRequests = blockedZoneData.data.viewer.zones[0].total[0].count;
+        } else {
+          zoneMetric.blockedRequests = 0;
+        }
+      } catch (blockedZoneError) {
+        console.error(`Error fetching blocked requests for zone ${zoneMetric.zoneTag}:`, blockedZoneError);
+        zoneMetric.blockedRequests = 0;
+      }
+
+      // Calculate clean requests for this zone
+      zoneMetric.cleanRequests = zoneMetric.requests - zoneMetric.blockedRequests;
+      
+      // Fetch DNS queries for this zone
       const dnsQuery = {
         operationName: 'DnsTotals',
         variables: {
@@ -431,8 +496,8 @@ async function fetchAccountMetrics(apiKey, accountId, env) {
         currentMonthTotal.dnsQueries += dnsCount;
       }
     }
-  } catch (dnsError) {
-    console.error('Error fetching DNS queries:', dnsError);
+  } catch (error) {
+    console.error('Error fetching zone metrics:', error);
   }
 
   // Handle previous month data

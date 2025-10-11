@@ -82,8 +82,8 @@ function ZonesList({ zones, zoneMetrics, usePreviousClassification = false, prev
                 <p className="font-semibold text-gray-900">{formatBandwidth(zone.bytes)}</p>
               </div>
               <div className="text-right">
-                <p className="text-xs text-gray-500">Requests</p>
-                <p className="font-semibold text-gray-900">{formatRequests(zone.requests)}</p>
+                <p className="text-xs text-gray-500">Billable Requests</p>
+                <p className="font-semibold text-gray-900">{formatRequests(zone.cleanRequests || zone.requests || 0)}</p>
               </div>
               <div className="text-right">
                 <p className="text-xs text-gray-500">DNS Queries</p>

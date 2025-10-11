@@ -392,7 +392,7 @@ function Dashboard({ config }) {
           />
 
           <MetricCard
-            title="HTTP Requests (clean traffic)"
+            title="Billable HTTP Requests (clean traffic)"
             value={usageViewMode === 'current' 
               ? displayMetrics?.current.cleanRequests || 0 
               : displayMetrics?.previous.cleanRequests || displayMetrics?.previous.requests || 0}
