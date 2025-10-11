@@ -57,17 +57,7 @@ binding = "CONFIG_KV"
 id = "YOUR_KV_NAMESPACE_ID"
 ```
 
-### 4. Set Your API Token (Required)
-
-Create a 'Read all resources' API token at [Cloudflare Dashboard](https://dash.cloudflare.com/profile/api-tokens), then store it securely as a Wrangler secret:
-
-```bash
-npx wrangler secret put CLOUDFLARE_API_TOKEN
-```
-
-When prompted, paste your API token. This stores it encrypted and keeps it out of your codebase.
-
-### 5. Deploy to Cloudflare Workers
+### 4. Deploy to Cloudflare Workers
 
 First build the project:
 
@@ -83,6 +73,18 @@ npx wrangler deploy
 
 After deployment, wrangler will output your Worker URL (e.g., `https://your-worker.your-subdomain.workers.dev`)
 
+### 5. Set Your API Token
+
+Create a 'Read all resources' API token at [Cloudflare Dashboard](https://dash.cloudflare.com/profile/api-tokens).
+
+Then store it securely as a Wrangler secret:
+
+```bash
+npx wrangler secret put CLOUDFLARE_API_TOKEN
+```
+
+When prompted, paste your API token. This stores it encrypted in Cloudflare's secret management system.
+
 ### 6. (Optional) Enable Cloudflare Access
 
 To limit access to your Worker to specific users or groups, you can enable Cloudflare Access:
@@ -97,7 +99,7 @@ Access allows you to restrict access to yourself, your teammates, your organizat
 
 ## Configuration
 
-After deployment, access your dashboard using the link provided by wrangler and click the **Settings** icon to configure:
+After deployment and setting your API token, access your dashboard using the Worker URL and click the **Settings** icon to configure:
 
 ### Account IDs
 
@@ -110,7 +112,7 @@ Enter your Cloudflare Account ID(s):
 
 - Monitor usage across multiple Cloudflare accounts
 - Metrics are automatically aggregated (zones, requests, bandwidth, DNS queries)
-- Your API token (set via wrangler secret) must have access to all accounts
+- Your API token must have access to all accounts you want to monitor
 
 ### Contracted Thresholds
 
