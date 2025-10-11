@@ -66,6 +66,18 @@ npx wrangler deploy
 
 After deployment, wrangler will output your Worker URL (e.g., `https://your-worker.your-subdomain.workers.dev`)
 
+### 5. (Optional) Enable Cloudflare Access
+
+To limit access to your Worker to specific users or groups, you can enable Cloudflare Access:
+
+1. In the [Cloudflare dashboard](https://dash.cloudflare.com), go to **Workers & Pages**
+2. Select your Worker from the Overview
+3. Go to **Settings → Domains & Routes**
+4. For `workers.dev` or Preview URLs, click **Enable Cloudflare Access**
+5. (Optional) Click **Manage Cloudflare Access** to configure authorized email addresses
+
+Access allows you to restrict access to yourself, your teammates, your organization, or anyone else you specify in your Access policy. Learn more about [Access policies](https://developers.cloudflare.com/cloudflare-one/policies/access/).
+
 ## Configuration
 
 After deployment, access your dashboard using the link provided by wrangler and configure the following:
@@ -106,21 +118,16 @@ Set your contracted limits for **aggregated usage** across all accounts:
 
 By default, the API token is configured via the dashboard UI and stored in Cloudflare KV.
 
-**For enhanced security**, you can optionally migrate to using Wrangler secrets for the API token (do this AFTER initial deployment and configuration):
+**For enhanced security**, you can optionally migrate to using Wrangler secrets for the API token:
 
 ```bash
 npx wrangler secret put CLOUDFLARE_API_TOKEN
 ```
 
-**Important:** You must deploy the Worker first (step 4) before you can set secrets.
-
 If this secret is set, it will override the UI-configured API token. This approach:
 
 - ✅ Keeps API token out of KV storage
 - ✅ Managed via Cloudflare's secret management
-- ✅ Can be rotated without redeploying code
-
-**Note:** Account IDs are always configured via the dashboard UI (not via secrets) to support multi-account setups.
 
 ## Architecture
 

@@ -15,7 +15,8 @@ function MetricCard({
   compact = false,
   zoneBreakdown = null,
   primaryZones = null,
-  secondaryZones = null
+  secondaryZones = null,
+  requestBreakdown = null
 }) {
   const getIcon = () => {
     switch (icon) {
@@ -113,6 +114,26 @@ function MetricCard({
                 <div className="flex items-center space-x-2">
                   <span className="text-gray-700 whitespace-nowrap">🔵 Secondary:</span>
                   <span className="font-semibold text-gray-900">{zoneBreakdown.secondary || 0}/{secondaryZones || 0}</span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Request Breakdown - Top Right */}
+          {requestBreakdown && (
+            <div className="ml-4 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
+              <div className="space-y-1 text-xs">
+                <div className="flex items-center space-x-2">
+                  <span className="text-gray-700 whitespace-nowrap">📊 Total:</span>
+                  <span className="font-semibold text-gray-900">
+                    {(requestBreakdown.total / 1e6).toFixed(2)}M
+                  </span>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <span className="text-gray-700 whitespace-nowrap">🛡️ Blocked:</span>
+                  <span className="font-semibold text-gray-900">
+                    {(requestBreakdown.blocked / 1e6).toFixed(2)}M
+                  </span>
                 </div>
               </div>
             </div>

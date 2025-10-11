@@ -377,7 +377,7 @@ function Dashboard({ config }) {
         </div>
         
         {/* Primary Metrics */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <MetricCard
             title="Enterprise Zones"
             value={displayZones?.enterprise || 0}
@@ -389,6 +389,30 @@ function Dashboard({ config }) {
             zoneBreakdown={displayMetrics?.previousMonthZoneBreakdown}
             primaryZones={config.primaryZones}
             secondaryZones={config.secondaryZones}
+          />
+
+          <MetricCard
+            title="HTTP Requests (clean traffic)"
+            value={usageViewMode === 'current' 
+              ? displayMetrics?.current.cleanRequests || 0 
+              : displayMetrics?.previous.cleanRequests || displayMetrics?.previous.requests || 0}
+            formatted={formatRequests(usageViewMode === 'current' 
+              ? displayMetrics?.current.cleanRequests || 0 
+              : displayMetrics?.previous.cleanRequests || displayMetrics?.previous.requests || 0)}
+            threshold={config.thresholdRequests}
+            percentage={calculatePercentage(usageViewMode === 'current' 
+              ? displayMetrics?.current.cleanRequests || 0 
+              : displayMetrics?.previous.cleanRequests || displayMetrics?.previous.requests || 0, config.thresholdRequests)}
+            icon="requests"
+            unit="M"
+            requestBreakdown={{
+              total: usageViewMode === 'current' 
+                ? displayMetrics?.current.totalRequests || 0 
+                : displayMetrics?.previous.totalRequests || displayMetrics?.previous.requests || 0,
+              blocked: usageViewMode === 'current' 
+                ? displayMetrics?.current.blockedRequests || 0 
+                : displayMetrics?.previous.blockedRequests || 0
+            }}
           />
           
           <MetricCard
@@ -410,57 +434,6 @@ function Dashboard({ config }) {
             icon="dns"
             unit="M"
           />
-        </div>
-
-        {/* Request Breakdown */}
-        <div className="bg-gray-50 border-l-4 border-l-blue-500 rounded-lg p-5">
-          <h4 className="text-base font-semibold text-gray-900 mb-4">HTTP Requests Breakdown</h4>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <MetricCard
-              title="Total Requests"
-              value={usageViewMode === 'current' 
-                ? displayMetrics?.current.totalRequests || 0 
-                : displayMetrics?.previous.totalRequests || displayMetrics?.previous.requests || 0}
-              formatted={formatRequests(usageViewMode === 'current' 
-                ? displayMetrics?.current.totalRequests || 0 
-                : displayMetrics?.previous.totalRequests || displayMetrics?.previous.requests || 0)}
-              icon="requests"
-              unit="M"
-              compact
-            />
-            
-            <MetricCard
-              title="Blocked Requests"
-              subtitle="(Security actions)"
-              value={usageViewMode === 'current' 
-                ? displayMetrics?.current.blockedRequests || 0 
-                : displayMetrics?.previous.blockedRequests || 0}
-              formatted={formatRequests(usageViewMode === 'current' 
-                ? displayMetrics?.current.blockedRequests || 0 
-                : displayMetrics?.previous.blockedRequests || 0)}
-              icon="shield"
-              unit="M"
-              compact
-            />
-            
-            <MetricCard
-              title="Clean Traffic (Billable)"
-              subtitle={usageViewMode === 'current' ? 'Used for threshold alerts' : 'Previous period'}
-              value={usageViewMode === 'current' 
-                ? displayMetrics?.current.cleanRequests || 0 
-                : displayMetrics?.previous.cleanRequests || displayMetrics?.previous.requests || 0}
-              formatted={formatRequests(usageViewMode === 'current' 
-                ? displayMetrics?.current.cleanRequests || 0 
-                : displayMetrics?.previous.cleanRequests || displayMetrics?.previous.requests || 0)}
-              threshold={config.thresholdRequests}
-              percentage={calculatePercentage(usageViewMode === 'current' 
-                ? displayMetrics?.current.cleanRequests || 0 
-                : displayMetrics?.previous.cleanRequests || displayMetrics?.previous.requests || 0, config.thresholdRequests)}
-              icon="check"
-              unit="M"
-              compact
-            />
-          </div>
         </div>
       </div>
 
