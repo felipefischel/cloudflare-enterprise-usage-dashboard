@@ -1025,7 +1025,7 @@ async function saveConfig(request, env, corsHeaders) {
     });
   }
 
-  // Store config in KV (don't store API key in plain text - this is just for demo)
+  // Store config in KV (API token is stored separately as a wrangler secret)
   await env.CONFIG_KV.put(`config:${userId}`, JSON.stringify(config));
 
   return new Response(

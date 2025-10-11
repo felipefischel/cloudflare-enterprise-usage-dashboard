@@ -35,8 +35,8 @@ function Dashboard({ config }) {
     const accountIds = config?.accountIds || (config?.accountId ? [config.accountId] : []);
     
     // Don't fetch if config is missing or incomplete
-    if (!config || !config.apiKey || accountIds.length === 0) {
-      setError('API credentials not configured. Please configure them in Settings.');
+    if (!config || accountIds.length === 0) {
+      setError('Account IDs not configured. Please configure them in Settings.');
       setLoading(false);
       return;
     }
@@ -51,7 +51,6 @@ function Dashboard({ config }) {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            apiKey: config.apiKey,
             accountIds: accountIds,
             // Legacy fallback
             accountId: accountIds[0],
@@ -61,7 +60,6 @@ function Dashboard({ config }) {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            apiKey: config.apiKey,
             accountIds: accountIds,
             // Legacy fallback
             accountId: accountIds[0],

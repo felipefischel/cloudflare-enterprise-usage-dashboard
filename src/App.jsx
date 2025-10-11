@@ -40,11 +40,11 @@ function App() {
         }
       }
       
-      // Check if API credentials are configured (support both formats)
+      // Check if account IDs are configured (support both formats)
       const hasAccountIds = data?.accountIds && Array.isArray(data.accountIds) && data.accountIds.length > 0;
       const hasLegacyAccountId = data?.accountId;
       
-      if (data && data.apiKey && (hasAccountIds || hasLegacyAccountId)) {
+      if (data && (hasAccountIds || hasLegacyAccountId)) {
         setConfig(data);
         setIsConfigured(true);
       }
