@@ -59,8 +59,15 @@ id = "YOUR_KV_NAMESPACE_ID"
 
 ### 4. Deploy to Cloudflare Workers
 
+First build the project:
+
 ```bash
 npm run build
+```
+
+Then deploy:
+
+```bash
 npx wrangler deploy
 ```
 

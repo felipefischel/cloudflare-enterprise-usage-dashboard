@@ -30,8 +30,6 @@ function ConfigForm({ onSave, initialConfig, onCancel }) {
     slackWebhook: initialConfig?.slackWebhook || '',
   });
 
-  const [newAccountId, setNewAccountId] = useState('');
-
   const [errors, setErrors] = useState({});
 
   const handleChange = (e) => {
@@ -48,17 +46,10 @@ function ConfigForm({ onSave, initialConfig, onCancel }) {
   };
 
   const addAccountId = () => {
-    if (newAccountId.trim() && !formData.accountIds.includes(newAccountId.trim())) {
-      setFormData(prev => ({
-        ...prev,
-        accountIds: [...prev.accountIds, newAccountId.trim()]
-      }));
-      setNewAccountId('');
-      // Clear any accountIds error
-      if (errors.accountIds) {
-        setErrors(prev => ({ ...prev, accountIds: null }));
-      }
-    }
+    setFormData(prev => ({
+      ...prev,
+      accountIds: [...prev.accountIds, '']
+    }));
   };
 
   const removeAccountId = (index) => {
@@ -207,8 +198,8 @@ function ConfigForm({ onSave, initialConfig, onCancel }) {
               Account IDs *
             </label>
             
-            {/* List of existing account IDs */}
-            <div className="space-y-2 mb-3">
+            {/* List of account ID input rows */}
+            <div className="space-y-2">
               {formData.accountIds.map((accountId, index) => (
                 <div key={index} className="flex items-center space-x-2">
                   <input
@@ -232,30 +223,15 @@ function ConfigForm({ onSave, initialConfig, onCancel }) {
               ))}
             </div>
 
-            {/* Add new account ID */}
-            <div className="flex items-center space-x-2">
-              <input
-                type="text"
-                value={newAccountId}
-                onChange={(e) => setNewAccountId(e.target.value)}
-                onKeyPress={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault();
-                    addAccountId();
-                  }
-                }}
-                className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                placeholder="Add another Account ID"
-              />
-              <button
-                type="button"
-                onClick={addAccountId}
-                className="p-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-                title="Add account"
-              >
-                <Plus className="w-5 h-5" />
-              </button>
-            </div>
+            {/* Add new row button */}
+            <button
+              type="button"
+              onClick={addAccountId}
+              className="mt-3 flex items-center space-x-2 px-4 py-2 text-blue-600 border border-blue-600 rounded-lg hover:bg-blue-50 transition-colors"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Add Another Account</span>
+            </button>
 
             {errors.accountIds && (
               <p className="text-red-600 text-sm mt-2">{errors.accountIds}</p>
