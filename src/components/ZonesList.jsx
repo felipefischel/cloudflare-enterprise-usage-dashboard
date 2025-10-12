@@ -78,7 +78,7 @@ function ZonesList({ zones, zoneMetrics, usePreviousClassification = false, prev
           {zoneMetrics && (
             <div className="flex items-center space-x-4 text-sm">
               <div className="text-right">
-                <p className="text-xs text-gray-500">Bandwidth</p>
+                <p className="text-xs text-gray-500">Data Transfer</p>
                 <p className="font-semibold text-gray-900">{formatBandwidth(zone.bytes)}</p>
               </div>
               <div className="text-right">

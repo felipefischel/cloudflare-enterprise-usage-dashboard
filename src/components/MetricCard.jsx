@@ -70,8 +70,13 @@ function MetricCard({
   };
 
   const change = getChangePercentage();
-  const isOverThreshold = threshold && percentage > 100;
-  const isWarning = threshold && percentage >= 90 && percentage <= 100;
+  
+  // Ensure percentage is a number
+  const numPercentage = Number(percentage) || 0;
+  
+  // Red if over 100%, amber if 90-100%, blue otherwise
+  const isOverThreshold = threshold && numPercentage > 100;
+  const isWarning = threshold && numPercentage >= 90 && numPercentage <= 100;
 
   return (
     <div className={`rounded-lg shadow-sm border-2 transition-all hover:shadow-md ${

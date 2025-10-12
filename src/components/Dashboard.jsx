@@ -202,7 +202,7 @@ function Dashboard({ config }) {
 
   const calculatePercentage = (current, threshold) => {
     if (!threshold || threshold === 0) return 0;
-    return Math.min((current / threshold) * 100, 100);
+    return (current / threshold) * 100;
   };
 
   if (loading && !metrics) {
@@ -357,7 +357,7 @@ function Dashboard({ config }) {
                 }`}
               >
                 <Calendar className="w-4 h-4" />
-                <span>Current</span>
+                <span>Current Month</span>
               </button>
               <button
                 onClick={() => setUsageViewMode('previous')}
@@ -439,35 +439,39 @@ function Dashboard({ config }) {
       {displayZones?.zones && displayZones.zones.length > 0 && (
         <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-lg">
           <div className="bg-gradient-to-r from-slate-700 to-slate-600 rounded-lg px-6 py-4 mb-6">
-            <h3 className="text-2xl font-semibold text-white tracking-tight">Breakdown by Zones</h3>
-            <p className="text-slate-200 text-sm mt-1">
-              View detailed metrics for each enterprise zone
-            </p>
-            
-            {/* Zone View Toggle */}
-            <div className="mt-4 flex space-x-2">
-              <button
-                onClick={() => setZonesViewMode('current')}
-                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                  zonesViewMode === 'current'
-                    ? 'bg-white text-slate-700'
-                    : 'bg-slate-600 text-slate-200 hover:bg-slate-500'
-                }`}
-              >
-                <Calendar className="w-4 h-4 inline mr-1" />
-                <span>This Month</span>
-              </button>
-              <button
-                onClick={() => setZonesViewMode('previous')}
-                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                  zonesViewMode === 'previous'
-                    ? 'bg-white text-slate-700'
-                    : 'bg-slate-600 text-slate-200 hover:bg-slate-500'
-                }`}
-              >
-                <Calendar className="w-4 h-4 inline mr-1" />
-                <span>Last Month</span>
-              </button>
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-2xl font-semibold text-white tracking-tight">Breakdown by Zones</h3>
+                <p className="text-slate-200 text-sm mt-1">
+                  View detailed metrics for each enterprise zone
+                </p>
+              </div>
+              
+              {/* Zone View Toggle */}
+              <div className="flex items-center bg-white rounded-lg p-1 shadow-sm">
+                <button
+                  onClick={() => setZonesViewMode('current')}
+                  className={`flex items-center space-x-2 px-4 py-2 rounded-md transition-all font-medium text-sm ${
+                    zonesViewMode === 'current'
+                      ? 'bg-blue-600 text-white shadow-sm'
+                      : 'text-gray-600 hover:bg-gray-50'
+                  }`}
+                >
+                  <Calendar className="w-4 h-4" />
+                  <span>Current Month</span>
+                </button>
+                <button
+                  onClick={() => setZonesViewMode('previous')}
+                  className={`flex items-center space-x-2 px-4 py-2 rounded-md transition-all font-medium text-sm ${
+                    zonesViewMode === 'previous'
+                      ? 'bg-blue-600 text-white shadow-sm'
+                      : 'text-gray-600 hover:bg-gray-50'
+                  }`}
+                >
+                  <Calendar className="w-4 h-4" />
+                  <span>Last Month</span>
+                </button>
+              </div>
             </div>
           </div>
           
