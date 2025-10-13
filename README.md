@@ -41,8 +41,8 @@ The easiest way to get started is using the **Deploy to Cloudflare** button abov
 
 **During deployment, you'll be prompted to:**
 
-1. ✅ **Name your KV namespace** - Change the default name to `CONFIG_KV` (recommended for consistency with the code)
-2. ✅ **Set your API token** - Paste your Cloudflare API token with "Read all resources" permissions (create one at [API Tokens](https://dash.cloudflare.com/profile/api-tokens))
+1. ✅ **Set your API token** - Paste your Cloudflare API token with "Read all resources" permissions (create one at [API Tokens](https://dash.cloudflare.com/profile/api-tokens))
+2. ✅ **Accept default settings** - The KV namespace and other resources will be created automatically
 
 **The deploy process will automatically:**
 

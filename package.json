@@ -37,7 +37,7 @@
       "CONFIG_KV": {
         "type": "kv_namespace",
         "name": "CONFIG_KV",
-        "description": "KV namespace for storing dashboard configuration, thresholds, and historical usage data. Recommended name: `CONFIG_KV`"
+        "description": "KV namespace for storing dashboard configuration, thresholds, and historical usage data. You can keep default name: `CONFIG_KV`"
       }
     }
   }
