@@ -28,5 +28,15 @@
     "typescript": "^5.3.3",
     "vite": "^5.0.8",
     "wrangler": "^4.42.0"
+  },
+  "cloudflare": {
+    "bindings": {
+      "CLOUDFLARE_API_TOKEN": {
+        "description": "Your Cloudflare API token with **Read all resources** permissions. Create one at [API Tokens](https://dash.cloudflare.com/profile/api-tokens) and paste it here."
+      },
+      "CONFIG_KV": {
+        "description": "KV namespace for storing dashboard configuration, thresholds, and historical usage data. Default name: `CONFIG_KV`"
+      }
+    }
   }
 }

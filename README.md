@@ -37,30 +37,29 @@ This is NOT an official Cloudflare tool. Official billing data from Cloudflare m
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/felipefischel/cloudflare-enterprise-usage-dashboard)
 
-The easiest way to get started is using the **Deploy to Cloudflare** button above. This will:
+The easiest way to get started is using the **Deploy to Cloudflare** button above.
+
+**During deployment, you'll be prompted to:**
+
+1. ✅ **Name your resources** - The KV namespace will default to `CONFIG_KV` 
+
+2. ✅ **Set your API token** - Paste your Cloudflare API token with "Read all resources" permissions (create one at [API Tokens](https://dash.cloudflare.com/profile/api-tokens))
+
+**The deploy process will automatically:**
 
 1. ✅ Clone the repository to your GitHub account
-2. ✅ Automatically create and configure a KV namespace
+2. ✅ Create and configure a KV namespace
 3. ✅ Build and deploy the Worker to your Cloudflare account
-4. ✅ Set up all required resources and bindings
+4. ✅ Set up cron triggers for automatic monitoring
 
-After deployment:
+**After deployment:**
 
-1. **Set your Cloudflare API token as a Worker Secret:**
-   - Navigate to: [Cloudflare Dashboard](https://dash.cloudflare.com) → **Workers and Pages** → **enterprise-usage-dashboard**
-   - Go to **Settings** → **Variables and Secrets**
-   - Click **Add Secret**
-   - Name: `CLOUDFLARE_API_TOKEN`
-   - Value: Paste your API token (create one at [API Tokens](https://dash.cloudflare.com/profile/api-tokens) with "Read all resources" permissions)
-
-2. **Configure your dashboard:**
+1. **Configure your dashboard:**
    - Visit your Worker URL
    - Click the Settings icon
    - Enter your Account IDs and contracted thresholds
 
-That's it! Your dashboard is ready to use.
-
-3. **(Optional) Enable Cloudflare Access:**
+2. **(Optional) Enable Cloudflare Access:**
    - Navigate to: [Cloudflare Dashboard](https://dash.cloudflare.com) → **Workers & Pages** → **enterprise-usage-dashboard**
    - Go to **Settings** → **Domains & Routes**
    - For `workers.dev` or Preview URLs, click **Enable Cloudflare Access**
@@ -68,6 +67,8 @@ That's it! Your dashboard is ready to use.
    - Learn more: [Access policies documentation](https://developers.cloudflare.com/cloudflare-one/policies/access/)
 
    This allows you to restrict access to yourself, your teammates, your organization, or anyone else you specify.
+
+**That's it! Your dashboard is ready to use.** ✨
 
 ## Manual Deployment
 
