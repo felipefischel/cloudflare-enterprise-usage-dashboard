@@ -185,8 +185,42 @@ async function fetchAccountMetrics(apiKey, accountId, env) {
   // Fetch account name
   const accountName = await fetchAccountName(apiKey, accountId);
   
-  // First, fetch Enterprise zones to get their IDs
-  const enterpriseZones = await fetchEnterpriseZones(apiKey, accountId);
+  // Calculate date ranges first (needed for cache keys)
+  const now = new Date();
+  const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const currentYear = now.getFullYear();
+  const currentMonth = now.getMonth() + 1;
+  const currentDay = now.getDate();
+  const currentHour = now.getHours();
+  
+  // Try to get cached current month data (10 min TTL with hour-based key)
+  const currentMonthCacheKey = `current-month:${accountId}:${currentYear}-${String(currentMonth).padStart(2, '0')}-${String(currentDay).padStart(2, '0')}-${String(Math.floor(currentHour / 1) * 1).padStart(2, '0')}`;
+  const cachedCurrentMonth = await env.CONFIG_KV.get(currentMonthCacheKey, 'json');
+  
+  // Check if we have a recent cache (within 10 minutes)
+  if (cachedCurrentMonth && cachedCurrentMonth.cachedAt) {
+    const cacheAge = Date.now() - cachedCurrentMonth.cachedAt;
+    if (cacheAge < 10 * 60 * 1000) { // 10 minutes
+      console.log(`Using cached current month data for account ${accountId} (age: ${Math.floor(cacheAge / 1000)}s)`);
+      return cachedCurrentMonth.data;
+    }
+  }
+  
+  // Check cached zones list (1 hour TTL)
+  const zonesCacheKey = `zones:${accountId}`;
+  let enterpriseZones = await env.CONFIG_KV.get(zonesCacheKey, 'json');
+  
+  if (!enterpriseZones) {
+    // Fetch Enterprise zones to get their IDs
+    enterpriseZones = await fetchEnterpriseZones(apiKey, accountId);
+    
+    // Cache the zones list for 1 hour
+    if (enterpriseZones && enterpriseZones.length > 0) {
+      await env.CONFIG_KV.put(zonesCacheKey, JSON.stringify(enterpriseZones), { expirationTtl: 3600 });
+    }
+  } else {
+    console.log(`Using cached zones list for account ${accountId}`);
+  }
   
   // If no enterprise zones, return empty metrics (don't throw error)
   if (!enterpriseZones || enterpriseZones.length === 0) {
@@ -225,9 +259,7 @@ async function fetchAccountMetrics(apiKey, accountId, env) {
 
   const zoneIds = enterpriseZones.map(z => z.id);
 
-  // Calculate date ranges
-  const now = new Date();
-  const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  // Date ranges (currentMonthStart already calculated above)
   const currentMonthEnd = now;
   
   const previousMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
@@ -393,116 +425,134 @@ async function fetchAccountMetrics(apiKey, accountId, env) {
   // Calculate clean traffic (billable requests = total - blocked)
   currentMonthTotal.cleanRequests = currentMonthTotal.totalRequests - currentMonthTotal.blockedRequests;
 
-  // Fetch blocked requests and DNS queries for each zone
+  // Fetch blocked requests and DNS queries for each zone IN PARALLEL
   try {
     const datetimeStart = currentMonthStart.toISOString();
     const datetimeEnd = currentMonthEnd.toISOString();
     
-    for (const zoneMetric of zoneMetrics) {
-      // Fetch blocked requests for this zone
-      try {
-        const blockedZoneQuery = {
-          operationName: 'GetZoneBlockedRequests',
-          variables: {
-            zoneTag: zoneMetric.zoneTag,
-            filter: {
-              AND: [
-                {
-                  datetime_geq: datetimeStart,
-                  datetime_leq: datetimeEnd,
-                  requestSource: 'eyeball'
-                },
-                {
-                  OR: [
-                    { securityAction: 'block' },
-                    { securityAction: 'challenge' },
-                    { securityAction: 'jschallenge' },
-                    { securityAction: 'connection_close' },
-                    { securityAction: 'challenge_failed' },
-                    { securityAction: 'jschallenge_failed' },
-                    { securityAction: 'force_connection_close' },
-                    { securityAction: 'managed_challenge' },
-                    { securityAction: 'managed_challenge_failed' }
-                  ]
-                }
-              ]
-            }
-          },
-          query: `query GetZoneBlockedRequests($zoneTag: string, $filter: ZoneHttpRequestsAdaptiveGroupsFilter_InputObject) {
-            viewer {
-              zones(filter: {zoneTag: $zoneTag}) {
-                total: httpRequestsAdaptiveGroups(filter: $filter, limit: 1) {
-                  count
+    // Process all zones in parallel
+    await Promise.all(zoneMetrics.map(async (zoneMetric) => {
+      // Fetch blocked requests and DNS queries in parallel for this zone
+      const [blockedResult, dnsResult] = await Promise.allSettled([
+        // Blocked requests query
+        (async () => {
+          const blockedZoneQuery = {
+            operationName: 'GetZoneBlockedRequests',
+            variables: {
+              zoneTag: zoneMetric.zoneTag,
+              filter: {
+                AND: [
+                  {
+                    datetime_geq: datetimeStart,
+                    datetime_leq: datetimeEnd,
+                    requestSource: 'eyeball'
+                  },
+                  {
+                    OR: [
+                      { securityAction: 'block' },
+                      { securityAction: 'challenge' },
+                      { securityAction: 'jschallenge' },
+                      { securityAction: 'connection_close' },
+                      { securityAction: 'challenge_failed' },
+                      { securityAction: 'jschallenge_failed' },
+                      { securityAction: 'force_connection_close' },
+                      { securityAction: 'managed_challenge' },
+                      { securityAction: 'managed_challenge_failed' }
+                    ]
+                  }
+                ]
+              }
+            },
+            query: `query GetZoneBlockedRequests($zoneTag: string, $filter: ZoneHttpRequestsAdaptiveGroupsFilter_InputObject) {
+              viewer {
+                zones(filter: {zoneTag: $zoneTag}) {
+                  total: httpRequestsAdaptiveGroups(filter: $filter, limit: 1) {
+                    count
+                  }
                 }
               }
-            }
-          }`
-        };
+            }`
+          };
 
-        const blockedZoneResponse = await fetch('https://api.cloudflare.com/client/v4/graphql', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiKey}`,
-          },
-          body: JSON.stringify(blockedZoneQuery),
-        });
+          const blockedZoneResponse = await fetch('https://api.cloudflare.com/client/v4/graphql', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${apiKey}`,
+            },
+            body: JSON.stringify(blockedZoneQuery),
+          });
 
-        const blockedZoneData = await blockedZoneResponse.json();
+          const blockedZoneData = await blockedZoneResponse.json();
+          
+          if (blockedZoneResponse.ok && blockedZoneData.data?.viewer?.zones?.[0]?.total?.[0]?.count) {
+            return blockedZoneData.data.viewer.zones[0].total[0].count;
+          }
+          return 0;
+        })(),
         
-        if (blockedZoneResponse.ok && blockedZoneData.data?.viewer?.zones?.[0]?.total?.[0]?.count) {
-          zoneMetric.blockedRequests = blockedZoneData.data.viewer.zones[0].total[0].count;
-        } else {
-          zoneMetric.blockedRequests = 0;
-        }
-      } catch (blockedZoneError) {
-        console.error(`Error fetching blocked requests for zone ${zoneMetric.zoneTag}:`, blockedZoneError);
+        // DNS queries
+        (async () => {
+          const dnsQuery = {
+            operationName: 'DnsTotals',
+            variables: {
+              zoneTag: zoneMetric.zoneTag,
+              filter: {
+                AND: [{
+                  datetime_geq: datetimeStart,
+                  datetime_leq: datetimeEnd
+                }]
+              }
+            },
+            query: `query DnsTotals($zoneTag: string, $filter: ZoneDnsAnalyticsAdaptiveGroupsFilter_InputObject) {
+              viewer {
+                zones(filter: {zoneTag: $zoneTag}) {
+                  queryTotals: dnsAnalyticsAdaptiveGroups(limit: 5000, filter: $filter) {
+                    count
+                  }
+                }
+              }
+            }`
+          };
+
+          const dnsResponse = await fetch('https://api.cloudflare.com/client/v4/graphql', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${apiKey}`,
+            },
+            body: JSON.stringify(dnsQuery),
+          });
+
+          const dnsData = await dnsResponse.json();
+          
+          if (dnsResponse.ok && dnsData.data?.viewer?.zones?.[0]?.queryTotals?.[0]?.count) {
+            return dnsData.data.viewer.zones[0].queryTotals[0].count;
+          }
+          return 0;
+        })()
+      ]);
+      
+      // Handle blocked requests result
+      if (blockedResult.status === 'fulfilled') {
+        zoneMetric.blockedRequests = blockedResult.value;
+      } else {
+        console.error(`Error fetching blocked requests for zone ${zoneMetric.zoneTag}:`, blockedResult.reason);
         zoneMetric.blockedRequests = 0;
       }
-
+      
       // Calculate clean requests for this zone
       zoneMetric.cleanRequests = zoneMetric.requests - zoneMetric.blockedRequests;
       
-      // Fetch DNS queries for this zone
-      const dnsQuery = {
-        operationName: 'DnsTotals',
-        variables: {
-          zoneTag: zoneMetric.zoneTag,
-          filter: {
-            AND: [{
-              datetime_geq: datetimeStart,
-              datetime_leq: datetimeEnd
-            }]
-          }
-        },
-        query: `query DnsTotals($zoneTag: string, $filter: ZoneDnsAnalyticsAdaptiveGroupsFilter_InputObject) {
-          viewer {
-            zones(filter: {zoneTag: $zoneTag}) {
-              queryTotals: dnsAnalyticsAdaptiveGroups(limit: 5000, filter: $filter) {
-                count
-              }
-            }
-          }
-        }`
-      };
-
-      const dnsResponse = await fetch('https://api.cloudflare.com/client/v4/graphql', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify(dnsQuery),
-      });
-
-      const dnsData = await dnsResponse.json();
-      
-      if (dnsResponse.ok && dnsData.data?.viewer?.zones?.[0]?.queryTotals?.[0]?.count) {
-        const dnsCount = dnsData.data.viewer.zones[0].queryTotals[0].count;
-        zoneMetric.dnsQueries = dnsCount;
-        currentMonthTotal.dnsQueries += dnsCount;
+      // Handle DNS result
+      if (dnsResult.status === 'fulfilled') {
+        zoneMetric.dnsQueries = dnsResult.value;
+        currentMonthTotal.dnsQueries += dnsResult.value;
+      } else {
+        console.error(`Error fetching DNS for zone ${zoneMetric.zoneTag}:`, dnsResult.reason);
+        zoneMetric.dnsQueries = 0;
       }
-    }
+    }));
   } catch (error) {
     console.error('Error fetching zone metrics:', error);
   }
@@ -589,51 +639,60 @@ async function fetchAccountMetrics(apiKey, accountId, env) {
       });
     });
     
-    // Fetch DNS queries for previous month
+    // Fetch DNS queries for previous month IN PARALLEL
     try {
       const prevDatetimeStart = previousMonthStart.toISOString();
       const prevDatetimeEnd = previousMonthEnd.toISOString();
       
-      for (const prevZoneMetric of prevZoneMetrics) {
-        const dnsQuery = {
-          operationName: 'DnsTotals',
-          variables: {
-            zoneTag: prevZoneMetric.zoneTag,
-            filter: {
-              AND: [{
-                datetime_geq: prevDatetimeStart,
-                datetime_leq: prevDatetimeEnd
-              }]
-            }
-          },
-          query: `query DnsTotals($zoneTag: string, $filter: ZoneDnsAnalyticsAdaptiveGroupsFilter_InputObject) {
-            viewer {
-              zones(filter: {zoneTag: $zoneTag}) {
-                queryTotals: dnsAnalyticsAdaptiveGroups(limit: 5000, filter: $filter) {
-                  count
+      const dnsResults = await Promise.allSettled(
+        prevZoneMetrics.map(async (prevZoneMetric) => {
+          const dnsQuery = {
+            operationName: 'DnsTotals',
+            variables: {
+              zoneTag: prevZoneMetric.zoneTag,
+              filter: {
+                AND: [{
+                  datetime_geq: prevDatetimeStart,
+                  datetime_leq: prevDatetimeEnd
+                }]
+              }
+            },
+            query: `query DnsTotals($zoneTag: string, $filter: ZoneDnsAnalyticsAdaptiveGroupsFilter_InputObject) {
+              viewer {
+                zones(filter: {zoneTag: $zoneTag}) {
+                  queryTotals: dnsAnalyticsAdaptiveGroups(limit: 5000, filter: $filter) {
+                    count
+                  }
                 }
               }
-            }
-          }`
-        };
+            }`
+          };
 
-        const dnsResponse = await fetch('https://api.cloudflare.com/client/v4/graphql', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiKey}`,
-          },
-          body: JSON.stringify(dnsQuery),
-        });
+          const dnsResponse = await fetch('https://api.cloudflare.com/client/v4/graphql', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${apiKey}`,
+            },
+            body: JSON.stringify(dnsQuery),
+          });
 
-        const dnsData = await dnsResponse.json();
-        
-        if (dnsResponse.ok && dnsData.data?.viewer?.zones?.[0]?.queryTotals?.[0]?.count) {
-          const dnsCount = dnsData.data.viewer.zones[0].queryTotals[0].count;
-          prevZoneMetric.dnsQueries = dnsCount;
-          previousMonthStats.dnsQueries += dnsCount;
+          const dnsData = await dnsResponse.json();
+          
+          if (dnsResponse.ok && dnsData.data?.viewer?.zones?.[0]?.queryTotals?.[0]?.count) {
+            return { zoneMetric: prevZoneMetric, count: dnsData.data.viewer.zones[0].queryTotals[0].count };
+          }
+          return { zoneMetric: prevZoneMetric, count: 0 };
+        })
+      );
+      
+      // Process results
+      dnsResults.forEach((result) => {
+        if (result.status === 'fulfilled') {
+          result.value.zoneMetric.dnsQueries = result.value.count;
+          previousMonthStats.dnsQueries += result.value.count;
         }
-      }
+      });
     } catch (prevDnsError) {
       console.error('Error fetching previous month DNS queries:', prevDnsError);
     }
@@ -730,46 +789,55 @@ async function fetchAccountMetrics(apiKey, accountId, env) {
         prevZoneMetricsForDns = enterpriseZones.map(z => ({ zoneTag: z.id, dnsQueries: 0 }));
       }
       
-      for (const prevZoneMetric of prevZoneMetricsForDns) {
-        const dnsQuery = {
-          operationName: 'DnsTotals',
-          variables: {
-            zoneTag: prevZoneMetric.zoneTag,
-            filter: {
-              AND: [{
-                datetime_geq: prevDatetimeStart,
-                datetime_leq: prevDatetimeEnd
-              }]
-            }
-          },
-          query: `query DnsTotals($zoneTag: string, $filter: ZoneDnsAnalyticsAdaptiveGroupsFilter_InputObject) {
-            viewer {
-              zones(filter: {zoneTag: $zoneTag}) {
-                queryTotals: dnsAnalyticsAdaptiveGroups(limit: 5000, filter: $filter) {
-                  count
+      const dnsResults = await Promise.allSettled(
+        prevZoneMetricsForDns.map(async (prevZoneMetric) => {
+          const dnsQuery = {
+            operationName: 'DnsTotals',
+            variables: {
+              zoneTag: prevZoneMetric.zoneTag,
+              filter: {
+                AND: [{
+                  datetime_geq: prevDatetimeStart,
+                  datetime_leq: prevDatetimeEnd
+                }]
+              }
+            },
+            query: `query DnsTotals($zoneTag: string, $filter: ZoneDnsAnalyticsAdaptiveGroupsFilter_InputObject) {
+              viewer {
+                zones(filter: {zoneTag: $zoneTag}) {
+                  queryTotals: dnsAnalyticsAdaptiveGroups(limit: 5000, filter: $filter) {
+                    count
+                  }
                 }
               }
-            }
-          }`
-        };
+            }`
+          };
 
-        const dnsResponse = await fetch('https://api.cloudflare.com/client/v4/graphql', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiKey}`,
-          },
-          body: JSON.stringify(dnsQuery),
-        });
+          const dnsResponse = await fetch('https://api.cloudflare.com/client/v4/graphql', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${apiKey}`,
+            },
+            body: JSON.stringify(dnsQuery),
+          });
 
-        const dnsData = await dnsResponse.json();
-        
-        if (dnsResponse.ok && dnsData.data?.viewer?.zones?.[0]?.queryTotals?.[0]?.count) {
-          const dnsCount = dnsData.data.viewer.zones[0].queryTotals[0].count;
-          prevZoneMetric.dnsQueries = dnsCount;
-          previousMonthStats.dnsQueries = (previousMonthStats.dnsQueries || 0) + dnsCount;
+          const dnsData = await dnsResponse.json();
+          
+          if (dnsResponse.ok && dnsData.data?.viewer?.zones?.[0]?.queryTotals?.[0]?.count) {
+            return { zoneMetric: prevZoneMetric, count: dnsData.data.viewer.zones[0].queryTotals[0].count };
+          }
+          return { zoneMetric: prevZoneMetric, count: 0 };
+        })
+      );
+      
+      // Process results
+      dnsResults.forEach((result) => {
+        if (result.status === 'fulfilled') {
+          result.value.zoneMetric.dnsQueries = result.value.count;
+          previousMonthStats.dnsQueries = (previousMonthStats.dnsQueries || 0) + result.value.count;
         }
-      }
+      });
       
       // Update zone metrics with DNS data
       if (previousMonthStats.zoneMetrics) {
@@ -837,6 +905,21 @@ async function fetchAccountMetrics(apiKey, accountId, env) {
       zones: prevZoneMetrics,
     },
   };
+  
+  // Cache the current month data (10 min TTL)
+  try {
+    await env.CONFIG_KV.put(
+      currentMonthCacheKey,
+      JSON.stringify({
+        cachedAt: Date.now(),
+        data: result
+      }),
+      { expirationTtl: 600 } // 10 minutes
+    );
+    console.log(`Cached current month data for account ${accountId}`);
+  } catch (cacheError) {
+    console.error('Failed to cache current month data:', cacheError);
+  }
   
   return result;
 }
@@ -1390,9 +1473,21 @@ async function fetchEnterpriseZones(apiKey, accountId) {
 }
 
 /**
- * Get all historical monthly data from KV
+ * Get all historical monthly data from KV (cached for 6 hours)
  */
 async function getHistoricalMonthlyData(env, accountId) {
+  // Check cache first (6 hour TTL)
+  const cacheKey = `historical-data:${accountId}`;
+  const cached = await env.CONFIG_KV.get(cacheKey, 'json');
+  
+  if (cached && cached.cachedAt) {
+    const cacheAge = Date.now() - cached.cachedAt;
+    if (cacheAge < 6 * 60 * 60 * 1000) { // 6 hours
+      console.log(`Using cached historical data for account ${accountId} (age: ${Math.floor(cacheAge / 3600000)}h)`);
+      return cached.data;
+    }
+  }
+  
   const historicalData = [];
   
   // List all monthly-stats keys for this account
@@ -1414,6 +1509,21 @@ async function getHistoricalMonthlyData(env, accountId) {
         dnsQueries: data.dnsQueries || 0,
       });
     }
+  }
+  
+  // Cache the historical data (6 hour TTL)
+  try {
+    await env.CONFIG_KV.put(
+      cacheKey,
+      JSON.stringify({
+        cachedAt: Date.now(),
+        data: historicalData
+      }),
+      { expirationTtl: 21600 } // 6 hours
+    );
+    console.log(`Cached historical data for account ${accountId}`);
+  } catch (cacheError) {
+    console.error('Failed to cache historical data:', cacheError);
   }
   
   return historicalData;
