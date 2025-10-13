@@ -35,7 +35,9 @@ This is NOT an official Cloudflare tool. Official billing data from Cloudflare m
 
 ## Automatic Deployment (Recommended)
 
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/felipefischel/cloudflare-enterprise-usage-dashboard)
+<a href="https://deploy.workers.cloudflare.com/?url=https://github.com/felipefischel/cloudflare-enterprise-usage-dashboard" target="_blank">
+  <img src="https://deploy.workers.cloudflare.com/button" alt="Deploy to Cloudflare" />
+</a>
 
 The easiest way to get started is using the **Deploy to Cloudflare** button above.
 
