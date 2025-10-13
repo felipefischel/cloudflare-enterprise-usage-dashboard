@@ -7,9 +7,9 @@ compatibility_flags = ["nodejs_compat"]
 assets = { directory = "./dist", binding = "ASSETS" }
 
 # KV namespace for storing user configuration
+# The namespace will be created during deployment with the binding name as default
 [[kv_namespaces]]
 binding = "CONFIG_KV"
-id = "YOUR_KV_NAMESPACE_ID"  # Replace with your KV namespace ID
 
 # Environment variables
 [vars]
