@@ -173,8 +173,6 @@ Set your contracted limits for **aggregated usage** across all accounts:
 - One alert per metric per month (automatic deduplication)
 - "Send Now" button for manual testing
 
-## Architecture
-
 ### Automatic Threshold Monitoring
 
 The dashboard includes a **Cloudflare Cron Trigger** that automatically checks thresholds every 6 hours:
@@ -198,38 +196,6 @@ The dashboard includes a **Cloudflare Cron Trigger** that automatically checks t
 - Verify your API token has the correct permissions
 - Check that your Account ID is correct
 - Ensure the API token hasn't expired
-
-## Deploy to Cloudflare Button Details
-
-### How It Works
-
-The Deploy to Cloudflare button simplifies deployment by:
-
-- **Cloning**: Creates a copy of this repository in your GitHub account
-- **Configuring**: Lets you customize Worker name, KV namespace name, and other settings
-- **Building**: Automatically runs the build process using Workers Builds
-- **Deploying**: Deploys to Cloudflare's global network
-- **Provisioning**: Creates all required resources (KV namespace, secrets, etc.)
-
-### Automatic Resource Provisioning
-
-Cloudflare reads the `wrangler.toml` configuration and automatically provisions:
-
-- **KV Namespace**: For configuration storage (binding: `CONFIG_KV`)
-- **Environment Variables**: API endpoint configuration
-- **Cron Triggers**: Scheduled threshold checks
-
-Resource IDs are automatically populated in your forked repository.
-
-### Secrets Configuration
-
-After deployment, you'll need to set one secret manually:
-
-```bash
-wrangler secret put CLOUDFLARE_API_TOKEN
-```
-
-This stores your Cloudflare API token securely in Cloudflare's secret management system.
 
 ### Limitations
 
