@@ -4,7 +4,8 @@ A real-time dashboard for Cloudflare Enterprise customers to monitor their month
 
 <img width="649" height="832" alt="Ent-Dash" src="https://github.com/user-attachments/assets/b2e49e4c-d820-4ec2-9b2e-ea03ce8a53ab" />
 
-## ⚠️ Important disclaimer:
+## ⚠️ Important Disclaimer
+
 This is NOT an official Cloudflare tool. Official billing data from Cloudflare may vary from the metrics shown here. Always refer to your official Cloudflare invoices and account dashboard for authoritative usage information.
 
 ## Features
@@ -15,12 +16,12 @@ This is NOT an official Cloudflare tool. Official billing data from Cloudflare m
   - Data Transfer
   - DNS Queries
 
-- 📈 **Usage Analytics**: 
+- 📈 **Usage Analytics**:
   - Current month vs. previous month comparison
   - Charts showing usage trends over time
   - Visual progress bars showing consumption against contracted thresholds
 
-- 🔔 **Alerts**: 
+- 🔔 **Alerts**:
   - Slack webhook notifications when usage reaches 90% of thresholds
   - Toggle alerts on/off as needed
 
@@ -30,7 +31,50 @@ This is NOT an official Cloudflare tool. Official billing data from Cloudflare m
 - Cloudflare account with Enterprise plan
 - Cloudflare API Token with appropriate permissions
 
-## Getting Started
+## How to Deploy
+
+### Deploy to Cloudflare (Recommended)
+
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/felipefischel/cloudflare-enterprise-usage-dashboard)
+
+The easiest way to get started is using the **Deploy to Cloudflare** button above. This will:
+
+1. ✅ Clone the repository to your GitHub account
+2. ✅ Automatically create and configure a KV namespace
+3. ✅ Build and deploy the Worker to your Cloudflare account
+4. ✅ Set up all required resources and bindings
+
+After deployment:
+
+1. **Set your Cloudflare API token as a Worker Secret:**
+   - Navigate to: [Cloudflare Dashboard](https://dash.cloudflare.com) → **Workers and Pages** → **enterprise-usage-dashboard**
+   - Go to **Settings** → **Variables and Secrets**
+   - Click **Add Secret**
+   - Name: `CLOUDFLARE_API_TOKEN`
+   - Value: Paste your API token (create one at [API Tokens](https://dash.cloudflare.com/profile/api-tokens) with "Read all resources" permissions)
+
+2. **Configure your dashboard:**
+   - Visit your Worker URL
+   - Click the Settings icon
+   - Enter your Account IDs and contracted thresholds
+
+That's it! Your dashboard is ready to use.
+
+### 3. (Optional) Enable Cloudflare Access
+
+To limit access to your Worker to specific users or groups, you can enable Cloudflare Access:
+
+1. In the [Cloudflare dashboard](https://dash.cloudflare.com), go to **Workers & Pages**
+2. Select your Worker from the Overview
+3. Go to **Settings → Domains & Routes**
+4. For `workers.dev` or Preview URLs, click **Enable Cloudflare Access**
+5. (Optional) Click **Manage Cloudflare Access** to configure authorized email addresses
+
+Access allows you to restrict access to yourself, your teammates, your organization, or anyone else you specify in your Access policy. Learn more about [Access policies](https://developers.cloudflare.com/cloudflare-one/policies/access/).
+
+## Manual Deployment
+
+If you prefer to deploy manually or need more control over the setup:
 
 ### 1. Clone the Repository
 
@@ -119,12 +163,14 @@ Enter your Cloudflare Account ID(s):
 ### Contracted Thresholds
 
 Set your contracted limits for **aggregated usage** across all accounts:
+
 - **Enterprise Zones**: Total number of enterprise zones across all accounts
 - **HTTP Requests**: Total HTTP requests contracted per month (all accounts combined)
 - **Data Transfer**: Total data transfer contracted per month (all accounts combined)
 - **DNS Queries**: Total DNS Queries contracted per month (all accounts combined)
 
 ### Slack Notifications (Optional)
+
 - **Slack Webhook URL**: Get from Slack's Incoming Webhooks app
 - Alerts trigger when usage reaches 90% of any threshold
 - One alert per metric per month (automatic deduplication)
@@ -151,6 +197,50 @@ The dashboard includes a **Cloudflare Cron Trigger** that automatically checks t
 ## Troubleshooting
 
 ### "Failed to fetch metrics" Error
+
 - Verify your API token has the correct permissions
 - Check that your Account ID is correct
 - Ensure the API token hasn't expired
+
+## Deploy to Cloudflare Button Details
+
+### How It Works
+
+The Deploy to Cloudflare button simplifies deployment by:
+
+- **Cloning**: Creates a copy of this repository in your GitHub account
+- **Configuring**: Lets you customize Worker name, KV namespace name, and other settings
+- **Building**: Automatically runs the build process using Workers Builds
+- **Deploying**: Deploys to Cloudflare's global network
+- **Provisioning**: Creates all required resources (KV namespace, secrets, etc.)
+
+### Automatic Resource Provisioning
+
+Cloudflare reads the `wrangler.toml` configuration and automatically provisions:
+
+- **KV Namespace**: For configuration storage (binding: `CONFIG_KV`)
+- **Environment Variables**: API endpoint configuration
+- **Cron Triggers**: Scheduled threshold checks
+
+Resource IDs are automatically populated in your forked repository.
+
+### Secrets Configuration
+
+After deployment, you'll need to set one secret manually:
+
+```bash
+wrangler secret put CLOUDFLARE_API_TOKEN
+```
+
+This stores your Cloudflare API token securely in Cloudflare's secret management system.
+
+### Limitations
+
+- **Source Repository**: Must be a public GitHub or GitLab repository
+- **Monorepos**: If using a subdirectory, all dependencies must be isolated within it
+- **Workers Only**: This button supports Workers applications (not Pages)
+
+### Learn More
+
+For detailed information about Deploy to Cloudflare buttons, visit:
+[Cloudflare Workers Deploy Buttons Documentation](https://developers.cloudflare.com/workers/platform/deploy-buttons/)
