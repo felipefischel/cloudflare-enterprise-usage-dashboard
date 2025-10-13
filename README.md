@@ -2,6 +2,8 @@
 
 A real-time dashboard for Cloudflare Enterprise customers to monitor their monthly consumption against contracted limits. Built with Cloudflare Workers, React, and Vite.
 
+<img width="649" height="832" alt="Ent-Dash" src="https://github.com/user-attachments/assets/b2e49e4c-d820-4ec2-9b2e-ea03ce8a53ab" />
+
 ## ⚠️ Important disclaimer:
 This is NOT an official Cloudflare tool. Official billing data from Cloudflare may vary from the metrics shown here. Always refer to your official Cloudflare invoices and account dashboard for authoritative usage information.
 
