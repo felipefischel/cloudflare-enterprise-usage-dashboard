@@ -61,11 +61,9 @@ The easiest way to get started is using the **Deploy to Cloudflare** button abov
 2. **(Optional) Enable Cloudflare Access:**
    - Navigate to: [Cloudflare Dashboard](https://dash.cloudflare.com) → **Workers & Pages** → **enterprise-usage-dashboard**
    - Go to **Settings** → **Domains & Routes**
-   - For `workers.dev` or Preview URLs, click **Enable Cloudflare Access**
-   - (Optional) Click **Manage Cloudflare Access** to configure authorized email addresses
+   - For `workers.dev` or Preview URLs, click **Enable Cloudflare Access**. Now only users with access to your Cloudflare Account will be able to access the dashboard.
+   - (Optional) Click **Manage Cloudflare Access** to configure authorized email addresses. This allows you to restrict access to yourself, your teammates, your organization, or anyone else you specify.
    - Learn more: [Access policies documentation](https://developers.cloudflare.com/cloudflare-one/policies/access/)
-
-   This allows you to restrict access to yourself, your teammates, your organization, or anyone else you specify.
 
 **That's it! Your dashboard is ready to use.** ✨
 

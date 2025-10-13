@@ -35,9 +35,7 @@
         "description": "Your Cloudflare API token with **Read all resources** permissions. Create one at [API Tokens](https://dash.cloudflare.com/profile/api-tokens) and paste it here."
       },
       "CONFIG_KV": {
-        "type": "kv_namespace",
-        "name": "CONFIG_KV",
-        "description": "KV namespace for storing dashboard configuration, thresholds, and historical usage data. You can keep default name: `CONFIG_KV`"
+        "description": "KV namespace for storing dashboard configuration, thresholds, and historical usage data. Can keep default name."
       }
     }
   }

@@ -1,4 +1,4 @@
 # Cloudflare API Token
 # Create a token at: https://dash.cloudflare.com/profile/api-tokens
 # Required permissions: "Read all resources"
-CLOUDFLARE_API_TOKEN=your-api-token-here
+CLOUDFLARE_API_TOKEN=
