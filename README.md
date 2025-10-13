@@ -33,7 +33,7 @@ This is NOT an official Cloudflare tool. Official billing data from Cloudflare m
 
 ## How to Deploy
 
-### Deploy to Cloudflare (Recommended)
+## Automatic Deployment (Recommended)
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/felipefischel/cloudflare-enterprise-usage-dashboard)
 
@@ -60,17 +60,14 @@ After deployment:
 
 That's it! Your dashboard is ready to use.
 
-### 3. (Optional) Enable Cloudflare Access
+3. **(Optional) Enable Cloudflare Access:**
+   - Navigate to: [Cloudflare Dashboard](https://dash.cloudflare.com) → **Workers & Pages** → **enterprise-usage-dashboard**
+   - Go to **Settings** → **Domains & Routes**
+   - For `workers.dev` or Preview URLs, click **Enable Cloudflare Access**
+   - (Optional) Click **Manage Cloudflare Access** to configure authorized email addresses
+   - Learn more: [Access policies documentation](https://developers.cloudflare.com/cloudflare-one/policies/access/)
 
-To limit access to your Worker to specific users or groups, you can enable Cloudflare Access:
-
-1. In the [Cloudflare dashboard](https://dash.cloudflare.com), go to **Workers & Pages**
-2. Select your Worker from the Overview
-3. Go to **Settings → Domains & Routes**
-4. For `workers.dev` or Preview URLs, click **Enable Cloudflare Access**
-5. (Optional) Click **Manage Cloudflare Access** to configure authorized email addresses
-
-Access allows you to restrict access to yourself, your teammates, your organization, or anyone else you specify in your Access policy. Learn more about [Access policies](https://developers.cloudflare.com/cloudflare-one/policies/access/).
+   This allows you to restrict access to yourself, your teammates, your organization, or anyone else you specify.
 
 ## Manual Deployment
 
