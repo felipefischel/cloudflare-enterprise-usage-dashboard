@@ -10,19 +10,25 @@ This is NOT an official Cloudflare tool. Official billing data from Cloudflare m
 
 ## Features
 
-- 📊 **Real-time Usage Monitoring**: Track key metrics:
-  - Number of Enterprise Zones
-  - HTTP Requests
-  - Data Transfer
+- 📊 **Real-time Usage Monitoring**: Track your contracted services:
+  - Enterprise Zones (primary/secondary)
+  - HTTP Requests (clean traffic only)
+  - Data Transfer (clean traffic only)
   - DNS Queries
+  - Application Security products (Bot Management, API Shield, Page Shield, etc.)
+  - Other add-on products
+
+- 🛡️ **Attack Traffic Excluded**: HTTP Requests and Data Transfer metrics automatically exclude traffic blocked by Cloudflare's security features (DDoS, WAF, rate limiting, bot management, etc.) - matching how Cloudflare bills
 
 - 📈 **Usage Analytics**:
   - Current month vs. previous month comparison
-  - Charts showing usage trends over time
-  - Visual progress bars showing consumption against contracted thresholds
+  - Historical trends with monthly charts
+  - Visual progress bars showing consumption against thresholds
+  - Per-zone breakdowns for detailed analysis
 
-- 🔔 **Alerts**:
-  - Slack webhook notifications when usage reaches 90% of thresholds
+- 🔔 **Threshold Alerts**:
+  - Slack notifications when usage reaches 90% of thresholds
+  - Automatic monitoring every 6 hours via cron trigger
   - Toggle alerts on/off as needed
 
 ## Prerequisites
@@ -63,9 +69,11 @@ The easiest way to get started is using the **Deploy to Cloudflare** button abov
 2. **(Optional) Enable Cloudflare Access:**
    - Navigate to: [Cloudflare Dashboard](https://dash.cloudflare.com) → **Workers & Pages** → **enterprise-usage-dashboard**
    - Go to **Settings** → **Domains & Routes**
-   - For `workers.dev` or Preview URLs, click **Enable Cloudflare Access**. Now only users with access to your Cloudflare Account will be able to access the dashboard.
-   - (Optional) Click **Manage Cloudflare Access** to configure authorized email addresses. This allows you to restrict access to yourself, your teammates, your organization, or anyone else you specify.
+   - For `workers.dev` or Preview URLs, click **Enable Cloudflare Access**
+   - (Optional) Click **Manage Cloudflare Access** to configure authorized email addresses
    - Learn more: [Access policies documentation](https://developers.cloudflare.com/cloudflare-one/policies/access/)
+
+   This allows you to restrict access to yourself, your teammates, your organization, or anyone else you specify.
 
 **That's it! Your dashboard is ready to use.** ✨
 
@@ -161,10 +169,11 @@ Enter your Cloudflare Account ID(s):
 
 Set your contracted limits for **aggregated usage** across all accounts:
 
-- **Enterprise Zones**: Total number of enterprise zones across all accounts
-- **HTTP Requests**: Total HTTP requests contracted per month (all accounts combined)
-- **Data Transfer**: Total data transfer contracted per month (all accounts combined)
-- **DNS Queries**: Total DNS Queries contracted per month (all accounts combined)
+- **Enterprise Zones**: Total number of enterprise zones
+- **HTTP Requests**: Total clean HTTP requests per month
+- **Data Transfer**: Total clean data transfer per month
+- **DNS Queries**: Total DNS queries per month
+- **Application Security Products**: Configure thresholds for Bot Management, API Shield, Page Shield, and Advanced Rate Limiting
 
 ### Slack Notifications (Optional)
 
@@ -183,11 +192,13 @@ The dashboard includes a **Cloudflare Cron Trigger** that automatically checks t
 - Sends Slack alerts if thresholds exceeded
 - View logs: `npx wrangler tail --format pretty`
 
-### Data Storage
+### Data Storage & Accuracy
 
-- **KV Storage**: Configuration, thresholds, historical data
-- **Monthly snapshots**: Stored for 1 year
+- **KV Storage**: Configuration, thresholds, and historical data
+- **Monthly snapshots**: Cached for 1 year for faster loading
 - **Alert tracking**: Prevents duplicate notifications
+- **Data source**: GraphQL Analytics API (same API that powers your Cloudflare dashboard)
+- **Sampling**: This dashboard relies on sampled data - for billing purposes, always refer to official Cloudflare data and invoices
 
 ## Troubleshooting
 

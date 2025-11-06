@@ -9,7 +9,7 @@ export default {
     
     // API routes
     if (url.pathname.startsWith('/api/')) {
-      return handleApiRequest(request, env, url);
+      return handleApiRequest(request, env, url, ctx);
     }
     
     // Serve static assets
@@ -17,15 +17,18 @@ export default {
   },
 
   async scheduled(event, env, ctx) {
-    // Run automatic threshold checks every 6 hours
-    ctx.waitUntil(runScheduledThresholdCheck(env));
+    // Run automatic threshold checks AND pre-warm cache every 6 hours
+    ctx.waitUntil(Promise.all([
+      runScheduledThresholdCheck(env),
+      preWarmCache(env)
+    ]));
   },
 };
 
 /**
  * Handle API requests
  */
-async function handleApiRequest(request, env, url) {
+async function handleApiRequest(request, env, url, ctx) {
   // CORS headers
   const corsHeaders = {
     'Access-Control-Allow-Origin': '*',
@@ -42,6 +45,22 @@ async function handleApiRequest(request, env, url) {
     // Route API requests
     if (url.pathname === '/api/metrics' && request.method === 'POST') {
       return await getMetrics(request, env, corsHeaders);
+    }
+    
+    if (url.pathname === '/api/metrics/progressive' && request.method === 'POST') {
+      return await getMetricsProgressive(request, env, corsHeaders);
+    }
+    
+    if (url.pathname === '/api/cache/status' && request.method === 'POST') {
+      return await getCacheStatus(request, env, corsHeaders);
+    }
+    
+    if (url.pathname === '/api/cache/warm' && request.method === 'POST') {
+      // Manually trigger cache pre-warming (for testing)
+      ctx.waitUntil(preWarmCache(env));
+      return new Response(JSON.stringify({ message: 'Cache warming triggered! Check logs with: npx wrangler tail' }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
     }
     
     if (url.pathname === '/api/zones' && request.method === 'POST') {
@@ -62,6 +81,10 @@ async function handleApiRequest(request, env, url) {
     
     if (url.pathname === '/api/firewall/test' && request.method === 'POST') {
       return await testFirewallQuery(request, env, corsHeaders);
+    }
+    
+    if (url.pathname === '/api/cache/prewarm' && request.method === 'POST') {
+      return await triggerPrewarm(request, env, corsHeaders);
     }
 
     return new Response(JSON.stringify({ error: 'Not found' }), {
@@ -149,6 +172,551 @@ async function getMetrics(request, env, corsHeaders) {
     {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     }
+  );
+}
+
+/**
+ * Progressive Loading: Return metrics in phases for faster perceived performance
+ * Phase 1 (<2s): Core metrics + zone count
+ * Phase 2 (3-5s): Zone breakdown
+ * Phase 3 (full): Historical time series
+ */
+async function getMetricsProgressive(request, env, corsHeaders) {
+  const body = await request.json();
+  const phase = body.phase || 1; // Which phase to return
+  
+  const apiKey = env.CLOUDFLARE_API_TOKEN;
+  const accountIds = parseAccountIds(body);
+
+  if (!apiKey) {
+    return new Response(JSON.stringify({ error: 'API token not configured' }), {
+      status: 400,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  }
+
+  if (accountIds.length === 0) {
+    return new Response(JSON.stringify({ error: 'Account IDs not configured' }), {
+      status: 400,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  }
+
+  try {
+    // Check if we have fully cached data (from cron pre-warming)
+    const cacheKey = `pre-warmed:${accountIds.join(',')}`;
+    const cachedData = await env.CONFIG_KV.get(cacheKey, 'json');
+    
+    if (cachedData && cachedData.data) {
+      console.log(`Cache HIT: Pre-warmed data available (age: ${Math.floor((Date.now() - cachedData.timestamp) / 1000)}s)`);
+      
+      // Check if cache is complete (has all ENABLED metrics)
+      const configData = await env.CONFIG_KV.get('config:default');
+      let cacheIsComplete = true;
+      
+      if (configData) {
+        const config = JSON.parse(configData);
+        
+        // Check App Services Core
+        if (config?.applicationServices?.core?.enabled && !cachedData.data.current) {
+          console.log('⚠️ Cache is incomplete: App Services Core enabled but not cached');
+          cacheIsComplete = false;
+        }
+        
+        // Check Bot Management
+        if (config?.applicationServices?.botManagement?.enabled) {
+          if (!cachedData.data.botManagement) {
+            console.log('⚠️ Cache is incomplete: Bot Management enabled but not cached');
+            cacheIsComplete = false;
+          } else if (!cachedData.data.botManagement.timeSeries) {
+            console.log('⚠️ Cache is incomplete: Bot Management missing timeSeries data');
+            cacheIsComplete = false;
+          } else if (!cachedData.data.botManagement.perAccountData) {
+            console.log('⚠️ Cache is incomplete: Bot Management missing perAccountData for account filtering');
+            cacheIsComplete = false;
+          }
+        }
+        
+        // Check API Shield
+        if (config?.applicationServices?.apiShield?.enabled) {
+          if (!cachedData.data.apiShield) {
+            console.log('⚠️ Cache is incomplete: API Shield enabled but not cached');
+            cacheIsComplete = false;
+          } else if (!cachedData.data.apiShield.timeSeries) {
+            console.log('⚠️ Cache is incomplete: API Shield missing timeSeries data');
+            cacheIsComplete = false;
+          } else if (!cachedData.data.apiShield.perAccountData) {
+            console.log('⚠️ Cache is incomplete: API Shield missing perAccountData for account filtering');
+            cacheIsComplete = false;
+          }
+        }
+        
+        // Check Page Shield
+        if (config?.applicationServices?.pageShield?.enabled) {
+          if (!cachedData.data.pageShield) {
+            console.log('⚠️ Cache is incomplete: Page Shield enabled but not cached');
+            cacheIsComplete = false;
+          } else if (!cachedData.data.pageShield.timeSeries) {
+            console.log('⚠️ Cache is incomplete: Page Shield missing timeSeries data');
+            cacheIsComplete = false;
+          } else if (!cachedData.data.pageShield.perAccountData) {
+            console.log('⚠️ Cache is incomplete: Page Shield missing perAccountData for account filtering');
+            cacheIsComplete = false;
+          }
+        }
+        
+        // Check Advanced Rate Limiting
+        if (config?.applicationServices?.advancedRateLimiting?.enabled) {
+          if (!cachedData.data.advancedRateLimiting) {
+            console.log('⚠️ Cache is incomplete: Advanced Rate Limiting enabled but not cached');
+            cacheIsComplete = false;
+          } else if (!cachedData.data.advancedRateLimiting.timeSeries) {
+            console.log('⚠️ Cache is incomplete: Advanced Rate Limiting missing timeSeries data');
+            cacheIsComplete = false;
+          } else if (!cachedData.data.advancedRateLimiting.perAccountData) {
+            console.log('⚠️ Cache is incomplete: Advanced Rate Limiting missing perAccountData for account filtering');
+            cacheIsComplete = false;
+          }
+        }
+        
+        // Future: Check other SKUs
+        // if (config?.zeroTrust?.access?.enabled && !cachedData.data.zeroTrustAccess) {
+        //   cacheIsComplete = false;
+        // }
+      }
+      
+      // Only use cache if it's complete
+      if (cacheIsComplete) {
+        console.log('✅ Using complete cached data');
+        return new Response(
+          JSON.stringify({ 
+            ...cachedData.data,
+            phase: 'cached',
+            cacheAge: Date.now() - cachedData.timestamp 
+          }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      } else {
+        console.log('🔄 Cache incomplete - falling through to fresh fetch');
+        // Don't return - fall through to fetch fresh data below
+      }
+    }
+
+    console.log(`Cache MISS or incomplete: Fetching phase ${phase} data`);
+
+    // Phase 1: Core metrics + zone count (FAST - 1-2s)
+    if (phase === 1) {
+      const phase1Data = await fetchPhase1Data(apiKey, accountIds, env);
+      return new Response(
+        JSON.stringify({ ...phase1Data, phase: 1 }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // Phase 2: Add zone breakdown (MEDIUM - 3-5s)
+    if (phase === 2) {
+      const phase2Data = await fetchPhase2Data(apiKey, accountIds, env);
+      return new Response(
+        JSON.stringify({ ...phase2Data, phase: 2 }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // Phase 3: Full data including historical (SLOW - 10s)
+    // Only fetch metrics that are ENABLED in config
+    const configData = await env.CONFIG_KV.get('config:default');
+    const config = configData ? JSON.parse(configData) : {};
+    
+    let coreMetrics = null;
+    let botManagementData = null;
+    let successfulMetrics = []; // ✅ Declare outside if block so add-ons can use it!
+    
+    // Fetch App Services Core if enabled
+    if (config?.applicationServices?.core?.enabled !== false) {
+      // Default to enabled for backward compatibility
+      console.log('📊 Fetching App Services Core metrics...');
+      const accountMetricsPromises = accountIds.map(accountId => 
+        fetchAccountMetrics(apiKey, accountId, env)
+      );
+      
+      const accountMetricsResults = await Promise.allSettled(accountMetricsPromises);
+      successfulMetrics = accountMetricsResults
+        .filter(result => result.status === 'fulfilled')
+        .map(result => result.value);
+      
+      if (successfulMetrics.length > 0) {
+        coreMetrics = aggregateAccountMetrics(successfulMetrics);
+      } else {
+        console.warn('⚠️ Failed to fetch core metrics from any account');
+      }
+    } else {
+      console.log('⏭️ App Services Core disabled - skipping fetch');
+    }
+    
+    // Fetch Bot Management if enabled
+    if (config?.applicationServices?.botManagement?.enabled && accountIds.length > 0) {
+      console.log('🤖 Fetching Bot Management metrics...');
+      const botManagementConfig = config.applicationServices.botManagement;
+      
+      const botMgmtPromises = accountIds.map(accountId =>
+        fetchBotManagementForAccount(apiKey, accountId, botManagementConfig, env)
+          .then(data => ({ accountId, data })) // ✅ Include accountId with data
+      );
+      
+      const botMgmtResults = await Promise.allSettled(botMgmtPromises);
+      const botMgmtData = botMgmtResults
+        .filter(result => result.status === 'fulfilled' && result.value?.data) // Check data exists
+        .map(result => result.value); // Now has { accountId, data }
+      
+      // Aggregate bot management across accounts
+      if (botMgmtData.length > 0) {
+        // Merge timeSeries from all accounts
+        const timeSeriesMap = new Map();
+        botMgmtData.forEach(accountEntry => {
+          if (accountEntry.data.timeSeries) {
+            accountEntry.data.timeSeries.forEach(entry => {
+              const existing = timeSeriesMap.get(entry.month);
+              if (existing) {
+                existing.goodRequests += entry.goodRequests || 0;
+              } else {
+                timeSeriesMap.set(entry.month, {
+                  month: entry.month,
+                  timestamp: entry.timestamp,
+                  goodRequests: entry.goodRequests || 0,
+                });
+              }
+            });
+          }
+        });
+
+        const mergedTimeSeries = Array.from(timeSeriesMap.values())
+          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+        botManagementData = {
+          enabled: true,
+          threshold: botManagementConfig.threshold,
+          current: {
+            goodRequests: botMgmtData.reduce((sum, entry) => sum + entry.data.current.goodRequests, 0),
+            zones: botMgmtData.flatMap(entry => entry.data.current.zones),
+          },
+          previous: {
+            goodRequests: botMgmtData.reduce((sum, entry) => sum + entry.data.previous.goodRequests, 0),
+            zones: botMgmtData.flatMap(entry => entry.data.previous.zones),
+          },
+          timeSeries: mergedTimeSeries,
+          // Store per-account data for filtering
+          perAccountData: botMgmtData.map(entry => ({
+            accountId: entry.accountId, // ✅ Use correct accountId
+            current: entry.data.current,
+            previous: entry.data.previous,
+            timeSeries: entry.data.timeSeries,
+          })),
+        };
+      }
+    } else {
+      console.log('⏭️ Bot Management disabled - skipping fetch');
+    }
+    
+    // Fetch API Shield if enabled (reuses existing zone data!)
+    let apiShieldData = null;
+    if (config?.applicationServices?.apiShield?.enabled && successfulMetrics && successfulMetrics.length > 0) {
+      console.log('🛡️ Calculating API Shield metrics from existing zone data...');
+      const apiShieldConfig = config.applicationServices.apiShield;
+      
+      const apiShieldPromises = successfulMetrics.map(accountData =>
+        calculateZoneBasedAddonForAccount(accountData, apiShieldConfig, env, 'api-shield')
+          .then(data => ({ accountId: accountData.accountId, data }))
+      );
+      
+      const apiShieldResults = await Promise.allSettled(apiShieldPromises);
+      const apiShieldAccounts = apiShieldResults
+        .filter(result => result.status === 'fulfilled' && result.value?.data)
+        .map(result => result.value);
+      
+      if (apiShieldAccounts.length > 0) {
+        // Merge timeSeries
+        const timeSeriesMap = new Map();
+        apiShieldAccounts.forEach(accountEntry => {
+          if (accountEntry.data.timeSeries) {
+            accountEntry.data.timeSeries.forEach(entry => {
+              const existing = timeSeriesMap.get(entry.month);
+              if (existing) {
+                existing.requests += entry.requests || 0;
+              } else {
+                timeSeriesMap.set(entry.month, {
+                  month: entry.month,
+                  timestamp: entry.timestamp,
+                  requests: entry.requests || 0,
+                });
+              }
+            });
+          }
+        });
+
+        const mergedTimeSeries = Array.from(timeSeriesMap.values())
+          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+        apiShieldData = {
+          enabled: true,
+          threshold: apiShieldConfig.threshold,
+          current: {
+            requests: apiShieldAccounts.reduce((sum, entry) => sum + entry.data.current.requests, 0),
+            zones: apiShieldAccounts.flatMap(entry => entry.data.current.zones),
+          },
+          previous: {
+            requests: apiShieldAccounts.reduce((sum, entry) => sum + entry.data.previous.requests, 0),
+            zones: apiShieldAccounts.flatMap(entry => entry.data.previous.zones),
+          },
+          timeSeries: mergedTimeSeries,
+          perAccountData: apiShieldAccounts.map(entry => ({
+            accountId: entry.accountId,
+            current: entry.data.current,
+            previous: entry.data.previous,
+            timeSeries: entry.data.timeSeries,
+          })),
+        };
+        console.log(`API Shield data calculated (${apiShieldData.current.zones.length} zones)`);
+      }
+    } else {
+      console.log('⏭️ API Shield disabled - skipping calculation');
+    }
+    
+    // Fetch Page Shield if enabled (reuses existing zone data!)
+    let pageShieldData = null;
+    if (config?.applicationServices?.pageShield?.enabled && successfulMetrics && successfulMetrics.length > 0) {
+      console.log('📄 Calculating Page Shield metrics from existing zone data...');
+      const pageShieldConfig = config.applicationServices.pageShield;
+      
+      const pageShieldPromises = successfulMetrics.map(accountData =>
+        calculateZoneBasedAddonForAccount(accountData, pageShieldConfig, env, 'page-shield')
+          .then(data => ({ accountId: accountData.accountId, data }))
+      );
+      
+      const pageShieldResults = await Promise.allSettled(pageShieldPromises);
+      const pageShieldAccounts = pageShieldResults
+        .filter(result => result.status === 'fulfilled' && result.value?.data)
+        .map(result => result.value);
+      
+      if (pageShieldAccounts.length > 0) {
+        // Merge timeSeries
+        const timeSeriesMap = new Map();
+        pageShieldAccounts.forEach(accountEntry => {
+          if (accountEntry.data.timeSeries) {
+            accountEntry.data.timeSeries.forEach(entry => {
+              const existing = timeSeriesMap.get(entry.month);
+              if (existing) {
+                existing.requests += entry.requests || 0;
+              } else {
+                timeSeriesMap.set(entry.month, {
+                  month: entry.month,
+                  timestamp: entry.timestamp,
+                  requests: entry.requests || 0,
+                });
+              }
+            });
+          }
+        });
+
+        const mergedTimeSeries = Array.from(timeSeriesMap.values())
+          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+        pageShieldData = {
+          enabled: true,
+          threshold: pageShieldConfig.threshold,
+          current: {
+            requests: pageShieldAccounts.reduce((sum, entry) => sum + entry.data.current.requests, 0),
+            zones: pageShieldAccounts.flatMap(entry => entry.data.current.zones),
+          },
+          previous: {
+            requests: pageShieldAccounts.reduce((sum, entry) => sum + entry.data.previous.requests, 0),
+            zones: pageShieldAccounts.flatMap(entry => entry.data.previous.zones),
+          },
+          timeSeries: mergedTimeSeries,
+          perAccountData: pageShieldAccounts.map(entry => ({
+            accountId: entry.accountId,
+            current: entry.data.current,
+            previous: entry.data.previous,
+            timeSeries: entry.data.timeSeries,
+          })),
+        };
+        console.log(`Page Shield data calculated (${pageShieldData.current.zones.length} zones)`);
+      }
+    } else {
+      console.log('⏭️ Page Shield disabled - skipping calculation');
+    }
+    
+    // Fetch Advanced Rate Limiting if enabled (reuses existing zone data!)
+    let advancedRateLimitingData = null;
+    if (config?.applicationServices?.advancedRateLimiting?.enabled && successfulMetrics && successfulMetrics.length > 0) {
+      console.log('⚡ Calculating Advanced Rate Limiting metrics from existing zone data...');
+      const rateLimitingConfig = config.applicationServices.advancedRateLimiting;
+      
+      const rateLimitingPromises = successfulMetrics.map(accountData =>
+        calculateZoneBasedAddonForAccount(accountData, rateLimitingConfig, env, 'advanced-rate-limiting')
+          .then(data => ({ accountId: accountData.accountId, data }))
+      );
+      
+      const rateLimitingResults = await Promise.allSettled(rateLimitingPromises);
+      const rateLimitingAccounts = rateLimitingResults
+        .filter(result => result.status === 'fulfilled' && result.value?.data)
+        .map(result => result.value);
+      
+      if (rateLimitingAccounts.length > 0) {
+        // Merge timeSeries
+        const timeSeriesMap = new Map();
+        rateLimitingAccounts.forEach(accountEntry => {
+          if (accountEntry.data.timeSeries) {
+            accountEntry.data.timeSeries.forEach(entry => {
+              const existing = timeSeriesMap.get(entry.month);
+              if (existing) {
+                existing.requests += entry.requests || 0;
+              } else {
+                timeSeriesMap.set(entry.month, {
+                  month: entry.month,
+                  timestamp: entry.timestamp,
+                  requests: entry.requests || 0,
+                });
+              }
+            });
+          }
+        });
+
+        const mergedTimeSeries = Array.from(timeSeriesMap.values())
+          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+        advancedRateLimitingData = {
+          enabled: true,
+          threshold: rateLimitingConfig.threshold,
+          current: {
+            requests: rateLimitingAccounts.reduce((sum, entry) => sum + entry.data.current.requests, 0),
+            zones: rateLimitingAccounts.flatMap(entry => entry.data.current.zones),
+          },
+          previous: {
+            requests: rateLimitingAccounts.reduce((sum, entry) => sum + entry.data.previous.requests, 0),
+            zones: rateLimitingAccounts.flatMap(entry => entry.data.previous.zones),
+          },
+          timeSeries: mergedTimeSeries,
+          perAccountData: rateLimitingAccounts.map(entry => ({
+            accountId: entry.accountId,
+            current: entry.data.current,
+            previous: entry.data.previous,
+            timeSeries: entry.data.timeSeries,
+          })),
+        };
+        console.log(`Advanced Rate Limiting data calculated (${advancedRateLimitingData.current.zones.length} zones)`);
+      }
+    } else {
+      console.log('⏭️ Advanced Rate Limiting disabled - skipping calculation');
+    }
+    
+    // Build response with only enabled metrics
+    const response = {
+      phase: 3,
+      ...(coreMetrics || {}),
+      ...(botManagementData && { botManagement: botManagementData }),
+      ...(apiShieldData && { apiShield: apiShieldData }),
+      ...(pageShieldData && { pageShield: pageShieldData }),
+      ...(advancedRateLimitingData && { advancedRateLimiting: advancedRateLimitingData }),
+    };
+    
+    return new Response(
+      JSON.stringify(response),
+      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
+
+  } catch (error) {
+    console.error('Progressive metrics error:', error);
+    return new Response(
+      JSON.stringify({ error: error.message }),
+      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
+  }
+}
+
+/**
+ * Phase 1: Fast core metrics (1-2s)
+ * Returns: Current month totals + zone count
+ */
+async function fetchPhase1Data(apiKey, accountIds, env) {
+  const now = new Date();
+  const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  
+  // Fetch zone counts in parallel
+  const zonesPromises = accountIds.map(accountId => fetchEnterpriseZones(apiKey, accountId));
+  const zonesResults = await Promise.allSettled(zonesPromises);
+  const allZones = zonesResults
+    .filter(result => result.status === 'fulfilled')
+    .flatMap(result => result.value || []);
+  
+  const totalZones = allZones.length;
+  
+  // For Phase 1, return cached current month data if available
+  // Otherwise return estimated/placeholder data
+  const phase1Metrics = {
+    current: {
+      totalRequests: 0,
+      blockedRequests: 0,
+      cleanRequests: 0,
+      bytes: 0,
+      dnsQueries: 0,
+    },
+    zonesCount: totalZones,
+    loading: true, // Indicates more data is being fetched
+  };
+  
+  return phase1Metrics;
+}
+
+/**
+ * Phase 2: Add zone breakdown (3-5s)
+ * Returns: Phase 1 + zone breakdown + current month details
+ */
+async function fetchPhase2Data(apiKey, accountIds, env) {
+  // Fetch current month metrics for all accounts (without historical data)
+  const accountMetricsPromises = accountIds.map(async (accountId) => {
+    const metrics = await fetchAccountMetrics(apiKey, accountId, env);
+    // Strip historical data to make it faster
+    return {
+      ...metrics,
+      timeSeries: [], // Exclude historical for Phase 2
+    };
+  });
+  
+  const accountMetricsResults = await Promise.allSettled(accountMetricsPromises);
+  const successfulMetrics = accountMetricsResults
+    .filter(result => result.status === 'fulfilled')
+    .map(result => result.value);
+  
+  const aggregated = aggregateAccountMetrics(successfulMetrics);
+  
+  return {
+    ...aggregated,
+    loading: true, // Still loading historical data
+  };
+}
+
+/**
+ * Check cache status for monitoring/debugging
+ */
+async function getCacheStatus(request, env, corsHeaders) {
+  const body = await request.json();
+  const accountIds = parseAccountIds(body);
+  
+  const cacheKey = `pre-warmed:${accountIds.join(',')}`;
+  const cachedData = await env.CONFIG_KV.get(cacheKey, 'json');
+  
+  const status = {
+    preWarmedCache: {
+      exists: !!cachedData,
+      age: cachedData ? Date.now() - cachedData.timestamp : null,
+      ageMinutes: cachedData ? Math.floor((Date.now() - cachedData.timestamp) / 60000) : null,
+    },
+    accountIds: accountIds,
+  };
+  
+  return new Response(
+    JSON.stringify(status),
+    { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
   );
 }
 
@@ -328,9 +896,17 @@ async function fetchAccountMetrics(apiKey, accountId, env) {
     totalRequests: 0, 
     blockedRequests: 0,
     cleanRequests: 0,
-    bytes: 0,
+    totalBytes: 0,
+    blockedBytes: 0,
+    bytes: 0, // This will be clean/billable bytes
     dnsQueries: 0
   };
+  
+  // Create zone name lookup map
+  const zoneNameMap = {};
+  enterpriseZones.forEach(z => {
+    zoneNameMap[z.id] = z.name;
+  });
   
   // Track per-zone metrics for primary/secondary classification
   const zoneMetrics = [];
@@ -345,7 +921,7 @@ async function fetchAccountMetrics(apiKey, accountId, env) {
       zoneRequests += item.sum.requests || 0;
       zoneBytes += item.sum.bytes || 0;
       currentMonthTotal.totalRequests += item.sum.requests || 0;
-      currentMonthTotal.bytes += item.sum.bytes || 0;
+      currentMonthTotal.totalBytes += item.sum.bytes || 0;
     });
     
     // Classify zone as primary or secondary based on bandwidth
@@ -353,6 +929,7 @@ async function fetchAccountMetrics(apiKey, accountId, env) {
     
     zoneMetrics.push({
       zoneTag: zone.zoneTag,
+      zoneName: zoneNameMap[zone.zoneTag] || zone.zoneTag, // ✅ Add zone name!
       requests: zoneRequests,
       bytes: zoneBytes,
       dnsQueries: 0,
@@ -398,6 +975,9 @@ async function fetchAccountMetrics(apiKey, accountId, env) {
           accounts(filter: {accountTag: $accountTag}) {
             total: httpRequestsAdaptiveGroups(filter: $filter, limit: 1) {
               count
+              sum {
+                bytes
+              }
             }
           }
         }
@@ -415,15 +995,18 @@ async function fetchAccountMetrics(apiKey, accountId, env) {
 
     const blockedData = await blockedResponse.json();
     
-    if (blockedResponse.ok && blockedData.data?.viewer?.accounts?.[0]?.total?.[0]?.count) {
-      currentMonthTotal.blockedRequests = blockedData.data.viewer.accounts[0].total[0].count;
+    if (blockedResponse.ok && blockedData.data?.viewer?.accounts?.[0]?.total?.[0]) {
+      const blockedStats = blockedData.data.viewer.accounts[0].total[0];
+      currentMonthTotal.blockedRequests = blockedStats.count || 0;
+      currentMonthTotal.blockedBytes = blockedStats.sum?.bytes || 0;
     }
   } catch (blockedError) {
     console.error('Error fetching blocked requests:', blockedError);
   }
   
-  // Calculate clean traffic (billable requests = total - blocked)
+  // Calculate clean traffic (billable = total - blocked)
   currentMonthTotal.cleanRequests = currentMonthTotal.totalRequests - currentMonthTotal.blockedRequests;
+  currentMonthTotal.bytes = currentMonthTotal.totalBytes - currentMonthTotal.blockedBytes; // Clean/billable bytes
 
   // Fetch blocked requests and DNS queries for each zone IN PARALLEL
   try {
@@ -562,8 +1145,10 @@ async function fetchAccountMetrics(apiKey, accountId, env) {
     totalRequests: 0,
     blockedRequests: 0,
     cleanRequests: 0,
-    requests: 0, 
-    bytes: 0,
+    requests: 0,
+    totalBytes: 0,
+    blockedBytes: 0,
+    bytes: 0, // This will be clean/billable bytes
     dnsQueries: 0
   };
   
@@ -624,7 +1209,7 @@ async function fetchAccountMetrics(apiKey, accountId, env) {
         zoneRequests += item.sum.requests || 0;
         zoneBytes += item.sum.bytes || 0;
         previousMonthStats.totalRequests += item.sum.requests || 0;
-        previousMonthStats.bytes += item.sum.bytes || 0;
+        previousMonthStats.totalBytes += item.sum.bytes || 0;
       });
       
       // Classify zone as primary or secondary based on bandwidth
@@ -632,6 +1217,7 @@ async function fetchAccountMetrics(apiKey, accountId, env) {
       
       prevZoneMetrics.push({
         zoneTag: zone.zoneTag,
+        zoneName: zoneNameMap[zone.zoneTag] || zone.zoneTag, // ✅ Add zone name!
         requests: zoneRequests,
         bytes: zoneBytes,
         dnsQueries: 0,
@@ -738,6 +1324,9 @@ async function fetchAccountMetrics(apiKey, accountId, env) {
             accounts(filter: {accountTag: $accountTag}) {
               total: httpRequestsAdaptiveGroups(filter: $filter, limit: 1) {
                 count
+                sum {
+                  bytes
+                }
               }
             }
           }
@@ -755,15 +1344,18 @@ async function fetchAccountMetrics(apiKey, accountId, env) {
 
       const prevBlockedData = await prevBlockedResponse.json();
       
-      if (prevBlockedResponse.ok && prevBlockedData.data?.viewer?.accounts?.[0]?.total?.[0]?.count) {
-        previousMonthStats.blockedRequests = prevBlockedData.data.viewer.accounts[0].total[0].count;
+      if (prevBlockedResponse.ok && prevBlockedData.data?.viewer?.accounts?.[0]?.total?.[0]) {
+        const prevBlockedStats = prevBlockedData.data.viewer.accounts[0].total[0];
+        previousMonthStats.blockedRequests = prevBlockedStats.count || 0;
+        previousMonthStats.blockedBytes = prevBlockedStats.sum?.bytes || 0;
       }
     } catch (prevBlockedError) {
       console.error('Error fetching previous month blocked requests:', prevBlockedError);
     }
 
-    // Calculate clean traffic for previous month
+    // Calculate clean traffic for previous month (billable = total - blocked)
     previousMonthStats.cleanRequests = previousMonthStats.totalRequests - previousMonthStats.blockedRequests;
+    previousMonthStats.bytes = previousMonthStats.totalBytes - previousMonthStats.blockedBytes; // Clean/billable bytes
     previousMonthStats.requests = previousMonthStats.cleanRequests; // For backward compatibility
 
     // Cache the previous month data since it's now complete
@@ -877,6 +1469,14 @@ async function fetchAccountMetrics(apiKey, accountId, env) {
 
   // Calculate primary/secondary zone counts for previous month
   const prevZoneMetrics = previousMonthStats.zoneMetrics || [];
+  
+  // ✅ Add zoneName to cached previous month zones (they might not have it from old cache)
+  prevZoneMetrics.forEach(zone => {
+    if (!zone.zoneName && zoneNameMap[zone.zoneTag]) {
+      zone.zoneName = zoneNameMap[zone.zoneTag];
+    }
+  });
+  
   const prevPrimaryZonesCount = prevZoneMetrics.filter(z => z.isPrimary).length;
   const prevSecondaryZonesCount = prevZoneMetrics.filter(z => !z.isPrimary).length;
 
@@ -1164,6 +1764,10 @@ async function checkThresholds(request, env, corsHeaders) {
             {
               type: 'mrkdwn',
               text: `*Current Bandwidth:*\n${((metrics.bandwidth || 0) / (1024 ** 4)).toFixed(2)} TB`
+            },
+            {
+              type: 'mrkdwn',
+              text: `*Bot Management (Good Requests):*\n${(metrics.botManagement || 0).toLocaleString()}`
             }
           ]
         },
@@ -1269,6 +1873,86 @@ async function checkThresholds(request, env, corsHeaders) {
         metricKey: 'dnsQueries',
         current: formatQueries(metrics.dnsQueries),
         threshold: formatQueries(thresholds.dnsQueries),
+        percentage: percentage.toFixed(1),
+      });
+    }
+  }
+
+  // Check Bot Management threshold (only if enabled)
+  if (metrics.botManagement && thresholds.botManagement) {
+    const percentage = (metrics.botManagement / thresholds.botManagement) * 100;
+    if (percentage >= 90) {
+      const formatRequests = (requests) => {
+        if (requests >= 1e6) {
+          return `${(requests / 1e6).toFixed(2)}M`;
+        }
+        return requests.toLocaleString();
+      };
+      alerts.push({
+        metric: 'Bot Management (Good Requests)',
+        metricKey: 'botManagement',
+        current: formatRequests(metrics.botManagement),
+        threshold: formatRequests(thresholds.botManagement),
+        percentage: percentage.toFixed(1),
+      });
+    }
+  }
+
+  // Check API Shield threshold (only if enabled)
+  if (metrics.apiShield && thresholds.apiShield) {
+    const percentage = (metrics.apiShield / thresholds.apiShield) * 100;
+    if (percentage >= 90) {
+      const formatRequests = (requests) => {
+        if (requests >= 1e6) {
+          return `${(requests / 1e6).toFixed(2)}M`;
+        }
+        return requests.toLocaleString();
+      };
+      alerts.push({
+        metric: 'API Shield (HTTP Requests)',
+        metricKey: 'apiShield',
+        current: formatRequests(metrics.apiShield),
+        threshold: formatRequests(thresholds.apiShield),
+        percentage: percentage.toFixed(1),
+      });
+    }
+  }
+
+  // Check Page Shield threshold (only if enabled)
+  if (metrics.pageShield && thresholds.pageShield) {
+    const percentage = (metrics.pageShield / thresholds.pageShield) * 100;
+    if (percentage >= 90) {
+      const formatRequests = (requests) => {
+        if (requests >= 1e6) {
+          return `${(requests / 1e6).toFixed(2)}M`;
+        }
+        return requests.toLocaleString();
+      };
+      alerts.push({
+        metric: 'Page Shield (HTTP Requests)',
+        metricKey: 'pageShield',
+        current: formatRequests(metrics.pageShield),
+        threshold: formatRequests(thresholds.pageShield),
+        percentage: percentage.toFixed(1),
+      });
+    }
+  }
+
+  // Check Advanced Rate Limiting threshold (only if enabled)
+  if (metrics.advancedRateLimiting && thresholds.advancedRateLimiting) {
+    const percentage = (metrics.advancedRateLimiting / thresholds.advancedRateLimiting) * 100;
+    if (percentage >= 90) {
+      const formatRequests = (requests) => {
+        if (requests >= 1e6) {
+          return `${(requests / 1e6).toFixed(2)}M`;
+        }
+        return requests.toLocaleString();
+      };
+      alerts.push({
+        metric: 'Advanced Rate Limiting (HTTP Requests)',
+        metricKey: 'advancedRateLimiting',
+        current: formatRequests(metrics.advancedRateLimiting),
+        threshold: formatRequests(thresholds.advancedRateLimiting),
         percentage: percentage.toFixed(1),
       });
     }
@@ -1470,6 +2154,480 @@ async function fetchEnterpriseZones(apiKey, accountId) {
   );
 
   return enterpriseZones;
+}
+
+/**
+ * Fetch Bot Management metrics for specific zones
+ * Returns good requests (likely human traffic with bot score > 30)
+ */
+async function fetchBotManagementMetrics(apiKey, zoneId, dateStart, dateEnd) {
+  const query = {
+    operationName: 'GetBotTimeseries',
+    variables: {
+      zoneTag: zoneId,
+      automatedFilter: {
+        AND: [
+          { requestSource: 'eyeball' },
+          { botScore: 1 },
+          { datetime_geq: dateStart },
+          { datetime_leq: dateEnd },
+          { botManagementDecision_neq: 'other' },
+          { botScoreSrcName_neq: 'verified_bot' },
+        ],
+      },
+      likelyAutomatedFilter: {
+        AND: [
+          { requestSource: 'eyeball' },
+          { botScore_geq: 2, botScore_leq: 29 },
+          { datetime_geq: dateStart },
+          { datetime_leq: dateEnd },
+          { botManagementDecision_neq: 'other' },
+        ],
+      },
+      likelyHumanFilter: {
+        AND: [
+          { requestSource: 'eyeball' },
+          { botScore_geq: 30, botScore_leq: 99 },
+          { datetime_geq: dateStart },
+          { datetime_leq: dateEnd },
+          { botManagementDecision_neq: 'other' },
+        ],
+      },
+      verifiedBotFilter: {
+        AND: [
+          { requestSource: 'eyeball' },
+          { datetime_geq: dateStart },
+          { datetime_leq: dateEnd },
+          { botManagementDecision_neq: 'other' },
+          { botScoreSrcName: 'verified_bot' },
+        ],
+      },
+    },
+    query: `query GetBotTimeseries($zoneTag: string, $automatedFilter: ZoneHttpRequestsAdaptiveGroupsFilter_InputObject, $likelyAutomatedFilter: ZoneHttpRequestsAdaptiveGroupsFilter_InputObject, $likelyHumanFilter: ZoneHttpRequestsAdaptiveGroupsFilter_InputObject, $verifiedBotFilter: ZoneHttpRequestsAdaptiveGroupsFilter_InputObject) {
+      viewer {
+        scope: zones(filter: {zoneTag: $zoneTag}) {
+          automated: httpRequestsAdaptiveGroups(filter: {AND: [{botManagementDecision_neq: "verified_bot"}, $automatedFilter]}, limit: 10000) {
+            dimensions {
+              ts: date
+              __typename
+            }
+            count
+            avg {
+              sampleInterval
+              __typename
+            }
+            __typename
+          }
+          likely_automated: httpRequestsAdaptiveGroups(filter: {AND: [{botManagementDecision_neq: "verified_bot"}, $likelyAutomatedFilter]}, limit: 10000) {
+            dimensions {
+              ts: date
+              __typename
+            }
+            count
+            avg {
+              sampleInterval
+              __typename
+            }
+            __typename
+          }
+          likely_human: httpRequestsAdaptiveGroups(filter: {AND: [{botManagementDecision_neq: "verified_bot"}, $likelyHumanFilter]}, limit: 10000) {
+            dimensions {
+              ts: date
+              __typename
+            }
+            count
+            avg {
+              sampleInterval
+              __typename
+            }
+            __typename
+          }
+          verified_bot: httpRequestsAdaptiveGroups(filter: {AND: [{botManagementDecision: "verified_bot"}, $verifiedBotFilter]}, limit: 10000) {
+            dimensions {
+              ts: date
+              __typename
+            }
+            count
+            avg {
+              sampleInterval
+              __typename
+            }
+            __typename
+          }
+          __typename
+        }
+        __typename
+      }
+    }`,
+  };
+
+  const response = await fetch('https://api.cloudflare.com/client/v4/graphql', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify(query),
+  });
+
+  const data = await response.json();
+
+  if (!response.ok || data.errors) {
+    console.error(`Failed to fetch bot management metrics for zone ${zoneId}:`, data.errors || data);
+    return null;
+  }
+
+  // Extract good requests (likely_human)
+  const scope = data.data?.viewer?.scope?.[0];
+  if (!scope) {
+    return null;
+  }
+
+  // Sum up all likely_human requests (bot score > 30 = good requests)
+  const likelyHumanData = scope.likely_human || [];
+  const goodRequests = likelyHumanData.reduce((total, entry) => {
+    return total + (entry.count || 0);
+  }, 0);
+
+  return {
+    zoneId,
+    goodRequests,
+    automated: scope.automated?.reduce((total, entry) => total + (entry.count || 0), 0) || 0,
+    likelyAutomated: scope.likely_automated?.reduce((total, entry) => total + (entry.count || 0), 0) || 0,
+    verifiedBot: scope.verified_bot?.reduce((total, entry) => total + (entry.count || 0), 0) || 0,
+  };
+}
+
+/**
+ * Aggregate Bot Management metrics across multiple zones
+ */
+async function fetchBotManagementForAccount(apiKey, accountId, botManagementConfig, env) {
+  if (!botManagementConfig || !botManagementConfig.enabled || !botManagementConfig.zones || botManagementConfig.zones.length === 0) {
+    return null;
+  }
+
+  // Calculate date ranges
+  const now = new Date();
+  const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const currentMonthEnd = now;
+  
+  const previousMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const previousMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59);
+
+  // Date strings in ISO format
+  const currentMonthStartISO = currentMonthStart.toISOString();
+  const currentMonthEndISO = currentMonthEnd.toISOString();
+  const previousMonthStartISO = previousMonthStart.toISOString();
+  const previousMonthEndISO = previousMonthEnd.toISOString();
+
+  // Get all enterprise zones to map IDs to names
+  const allZones = await fetchEnterpriseZones(apiKey, accountId);
+  const zoneMap = {};
+  const accountZoneIds = new Set();
+  allZones.forEach(zone => {
+    zoneMap[zone.id] = zone.name;
+    accountZoneIds.add(zone.id);
+  });
+
+  // Filter configured zones to only those that belong to this account
+  const accountBotZones = botManagementConfig.zones.filter(zoneId => accountZoneIds.has(zoneId));
+  
+  // If no zones belong to this account, return null
+  if (accountBotZones.length === 0) {
+    return null;
+  }
+
+  // Fetch current month metrics for each configured zone IN THIS ACCOUNT
+  const currentMonthPromises = accountBotZones.map(zoneId =>
+    fetchBotManagementMetrics(apiKey, zoneId, currentMonthStartISO, currentMonthEndISO)
+  );
+
+  const currentMonthResults = await Promise.allSettled(currentMonthPromises);
+  const currentMonthData = currentMonthResults
+    .filter(result => result.status === 'fulfilled' && result.value)
+    .map(result => result.value);
+
+  // Fetch previous month metrics
+  const previousMonthPromises = accountBotZones.map(zoneId =>
+    fetchBotManagementMetrics(apiKey, zoneId, previousMonthStartISO, previousMonthEndISO)
+  );
+
+  const previousMonthResults = await Promise.allSettled(previousMonthPromises);
+  const previousMonthData = previousMonthResults
+    .filter(result => result.status === 'fulfilled' && result.value)
+    .map(result => result.value);
+
+  // Aggregate results
+  const currentTotal = currentMonthData.reduce((sum, zone) => sum + zone.goodRequests, 0);
+  const previousTotal = previousMonthData.reduce((sum, zone) => sum + zone.goodRequests, 0);
+
+  // Build zone breakdown
+  const zoneBreakdown = currentMonthData.map(zone => ({
+    zoneId: zone.zoneId,
+    zoneName: zoneMap[zone.zoneId] || zone.zoneId,
+    goodRequests: zone.goodRequests,
+    automated: zone.automated,
+    likelyAutomated: zone.likelyAutomated,
+    verifiedBot: zone.verifiedBot,
+  }));
+
+  const previousZoneBreakdown = previousMonthData.map(zone => ({
+    zoneId: zone.zoneId,
+    zoneName: zoneMap[zone.zoneId] || zone.zoneId,
+    goodRequests: zone.goodRequests,
+    automated: zone.automated,
+    likelyAutomated: zone.likelyAutomated,
+    verifiedBot: zone.verifiedBot,
+  }));
+
+  // Store previous month data in KV if we're past day 2 of current month
+  const previousMonthKey = `${previousMonthStart.getFullYear()}-${String(previousMonthStart.getMonth() + 1).padStart(2, '0')}`;
+  if (now.getDate() >= 2) {
+    try {
+      await env.CONFIG_KV.put(
+        `monthly-bot-stats:${accountId}:${previousMonthKey}`,
+        JSON.stringify({
+          goodRequests: previousTotal,
+          zones: previousZoneBreakdown,
+        }),
+        { expirationTtl: 31536000 } // 1 year
+      );
+      console.log(`Stored Bot Management stats for ${previousMonthKey}`);
+    } catch (error) {
+      console.error('Failed to store Bot Management monthly stats:', error);
+    }
+  }
+
+  // Get historical Bot Management data
+  const historicalBotData = await getHistoricalBotManagementData(env, accountId);
+  
+  // Build timeSeries
+  const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const timeSeriesData = [
+    ...historicalBotData,
+    {
+      month: currentMonthKey,
+      timestamp: currentMonthStart.toISOString(),
+      goodRequests: currentTotal,
+    }
+  ];
+
+  return {
+    enabled: true,
+    threshold: botManagementConfig.threshold || null,
+    current: {
+      goodRequests: currentTotal,
+      zones: zoneBreakdown,
+    },
+    previous: {
+      goodRequests: previousTotal,
+      zones: previousZoneBreakdown,
+    },
+    timeSeries: timeSeriesData,
+  };
+}
+
+/**
+ * Get all historical Bot Management data from KV (cached for 6 hours)
+ */
+async function getHistoricalBotManagementData(env, accountId) {
+  // Check cache first (6 hour TTL)
+  const cacheKey = `historical-bot-data:${accountId}`;
+  const cached = await env.CONFIG_KV.get(cacheKey, 'json');
+  
+  if (cached && cached.cachedAt) {
+    const cacheAge = Date.now() - cached.cachedAt;
+    if (cacheAge < 6 * 60 * 60 * 1000) { // 6 hours
+      console.log(`Using cached historical Bot Management data for account ${accountId} (age: ${Math.floor(cacheAge / 3600000)}h)`);
+      return cached.data;
+    }
+  }
+  
+  const historicalData = [];
+  
+  // List all monthly-bot-stats keys for this account
+  const listResult = await env.CONFIG_KV.list({ prefix: `monthly-bot-stats:${accountId}:` });
+  
+  for (const key of listResult.keys) {
+    const data = await env.CONFIG_KV.get(key.name, 'json');
+    if (data) {
+      // Extract month from key: monthly-bot-stats:{accountId}:YYYY-MM
+      const month = key.name.split(':')[2];
+      const [year, monthNum] = month.split('-');
+      const timestamp = new Date(parseInt(year), parseInt(monthNum) - 1, 1).toISOString();
+      
+      historicalData.push({
+        month,
+        timestamp,
+        goodRequests: data.goodRequests || 0,
+      });
+    }
+  }
+  
+  // Cache the historical data (6 hour TTL)
+  try {
+    await env.CONFIG_KV.put(
+      cacheKey,
+      JSON.stringify({
+        cachedAt: Date.now(),
+        data: historicalData
+      }),
+      { expirationTtl: 21600 } // 6 hours
+    );
+    console.log(`Cached historical Bot Management data for account ${accountId}`);
+  } catch (cacheError) {
+    console.error('Failed to cache historical Bot Management data:', cacheError);
+  }
+  
+  return historicalData;
+}
+
+/**
+ * Calculate add-on metrics from existing zone data (API Shield, Page Shield, Advanced Rate Limiting)
+ * These add-ons use HTTP request data we already have - just filter by configured zones!
+ */
+async function calculateZoneBasedAddonForAccount(accountData, addonConfig, env, addonType) {
+  if (!addonConfig || !addonConfig.enabled) {
+    return null;
+  }
+
+  if (!addonConfig.zones || addonConfig.zones.length === 0) {
+    console.log(`${addonType}: No zones configured for account ${accountData.accountId}, skipping`);
+    return null;
+  }
+
+  const configuredZones = new Set(addonConfig.zones);
+  
+  // Filter current month zones to only those configured for this add-on
+  const currentZones = (accountData.zoneBreakdown?.zones || [])
+    .filter(zone => configuredZones.has(zone.zoneTag))
+    .map(zone => ({
+      zoneId: zone.zoneTag,
+      zoneName: zone.zoneName || zone.zoneTag,
+      requests: zone.requests || 0,
+    }));
+  
+  // Filter previous month zones
+  const previousZones = (accountData.previousMonthZoneBreakdown?.zones || [])
+    .filter(zone => configuredZones.has(zone.zoneTag))
+    .map(zone => ({
+      zoneId: zone.zoneTag,
+      zoneName: zone.zoneName || zone.zoneTag,
+      requests: zone.requests || 0,
+    }));
+  
+  // Sum up requests for configured zones
+  const currentTotal = currentZones.reduce((sum, zone) => sum + (zone.requests || 0), 0);
+  const previousTotal = previousZones.reduce((sum, zone) => sum + (zone.requests || 0), 0);
+  
+  // Load historical data from KV
+  const historicalData = await getHistoricalAddonData(env, accountData.accountId, addonType);
+  
+  // Build timeSeries (include both previous and current month!)
+  const now = new Date();
+  const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  
+  const previousMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const previousMonthKey = `${previousMonthStart.getFullYear()}-${String(previousMonthStart.getMonth() + 1).padStart(2, '0')}`;
+  
+  const timeSeries = [
+    ...historicalData,
+    // ✅ Add previous month (we have this data!)
+    {
+      month: previousMonthKey,
+      timestamp: previousMonthStart.toISOString(),
+      requests: previousTotal,
+    },
+    // ✅ Add current month
+    {
+      month: currentMonthKey,
+      timestamp: currentMonthStart.toISOString(),
+      requests: currentTotal,
+    }
+  ].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+  
+  // Store previous month data in KV if we're past day 2 of current month
+  const kvPrefix = `monthly-${addonType.toLowerCase().replace(/\s+/g, '-')}-stats`;
+  
+  if (now.getDate() >= 2 && previousTotal > 0) {
+    try {
+      await env.CONFIG_KV.put(
+        `${kvPrefix}:${accountData.accountId}:${previousMonthKey}`,
+        JSON.stringify({
+          requests: previousTotal,
+          zones: previousZones,
+        }),
+        { expirationTtl: 31536000 } // 1 year
+      );
+      console.log(`Stored ${addonType} stats for ${previousMonthKey}`);
+    } catch (error) {
+      console.error(`Failed to store ${addonType} monthly stats:`, error);
+    }
+  }
+
+  return {
+    current: {
+      requests: currentTotal,
+      zones: currentZones,
+    },
+    previous: {
+      requests: previousTotal,
+      zones: previousZones,
+    },
+    timeSeries,
+  };
+}
+
+/**
+ * Get historical addon data from KV (cached for 6 hours)
+ */
+async function getHistoricalAddonData(env, accountId, addonType) {
+  const kvPrefix = `monthly-${addonType.toLowerCase().replace(/\s+/g, '-')}-stats`;
+  const cacheKey = `historical-${addonType.toLowerCase().replace(/\s+/g, '-')}-data:${accountId}`;
+  const cached = await env.CONFIG_KV.get(cacheKey, 'json');
+  
+  if (cached && cached.cachedAt) {
+    const cacheAge = Date.now() - cached.cachedAt;
+    if (cacheAge < 6 * 60 * 60 * 1000) { // 6 hours
+      console.log(`Using cached historical ${addonType} data for account ${accountId}`);
+      return cached.data;
+    }
+  }
+  
+  const historicalData = [];
+  const listResult = await env.CONFIG_KV.list({ prefix: `${kvPrefix}:${accountId}:` });
+  
+  for (const key of listResult.keys) {
+    const data = await env.CONFIG_KV.get(key.name, 'json');
+    if (data) {
+      const month = key.name.split(':')[2];
+      const [year, monthNum] = month.split('-');
+      const timestamp = new Date(parseInt(year), parseInt(monthNum) - 1, 1).toISOString();
+      
+      historicalData.push({
+        month,
+        timestamp,
+        requests: data.requests || 0,
+      });
+    }
+  }
+  
+  // Cache the historical data
+  try {
+    await env.CONFIG_KV.put(
+      cacheKey,
+      JSON.stringify({
+        cachedAt: Date.now(),
+        data: historicalData
+      }),
+      { expirationTtl: 21600 } // 6 hours
+    );
+  } catch (cacheError) {
+    console.error(`Failed to cache historical ${addonType} data:`, cacheError);
+  }
+  
+  return historicalData;
 }
 
 /**
@@ -1685,6 +2843,403 @@ async function testFirewallQuery(request, env, corsHeaders) {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     }
   );
+}
+
+/**
+ * Manual trigger for cache pre-warming (API endpoint)
+ */
+async function triggerPrewarm(request, env, corsHeaders) {
+  try {
+    console.log('🔥 Manual cache pre-warm triggered via API');
+    
+    // Run pre-warm in background
+    const startTime = Date.now();
+    await preWarmCache(env);
+    const duration = Date.now() - startTime;
+    
+    return new Response(
+      JSON.stringify({ 
+        success: true,
+        message: 'Cache pre-warming completed successfully',
+        duration: `${(duration / 1000).toFixed(2)}s`
+      }),
+      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
+  } catch (error) {
+    console.error('Pre-warm trigger error:', error);
+    return new Response(
+      JSON.stringify({ 
+        success: false,
+        error: error.message 
+      }),
+      { 
+        status: 500,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+      }
+    );
+  }
+}
+
+/**
+ * Pre-warm cache (triggered by Cron every 6 hours)
+ * Fetches and caches all dashboard data so subsequent loads are instant
+ * This is the SECRET SAUCE for scaling to many SKUs! 🚀
+ */
+async function preWarmCache(env) {
+  try {
+    console.log('🔥 Pre-warming cache started...');
+    
+    // Get configuration to know which accounts to fetch
+    const configData = await env.CONFIG_KV.get('config:default');
+    if (!configData) {
+      console.log('Pre-warm: No configuration found, skipping');
+      return;
+    }
+
+    const config = JSON.parse(configData);
+    const apiKey = env.CLOUDFLARE_API_TOKEN;
+    const accountIds = config.accountIds || (config.accountId ? [config.accountId] : []);
+    
+    if (!apiKey) {
+      console.log('Pre-warm: API token not configured, skipping');
+      return;
+    }
+
+    if (accountIds.length === 0) {
+      console.log('Pre-warm: No account IDs configured, skipping');
+      return;
+    }
+
+    const startTime = Date.now();
+    console.log(`Pre-warm: Fetching data for ${accountIds.length} account(s)...`);
+
+    let coreMetrics = null;
+    let zonesCount = 0;
+    let zonesData = null;
+    let botManagementData = null;
+    let successfulMetrics = []; // ✅ Declare outside if block so add-ons can use it!
+
+    // Fetch App Services Core if enabled
+    if (config?.applicationServices?.core?.enabled !== false) {
+      // Default to enabled for backward compatibility
+      console.log('Pre-warm: Fetching App Services Core metrics...');
+      
+      const accountMetricsPromises = accountIds.map(accountId => 
+        fetchAccountMetrics(apiKey, accountId, env)
+      );
+      
+      const accountMetricsResults = await Promise.allSettled(accountMetricsPromises);
+      successfulMetrics = accountMetricsResults
+        .filter(result => result.status === 'fulfilled')
+        .map(result => result.value);
+      
+      if (successfulMetrics.length > 0) {
+        coreMetrics = aggregateAccountMetrics(successfulMetrics);
+        console.log(`Pre-warm: Core metrics fetched successfully`);
+      } else {
+        console.log('Pre-warm: Failed to fetch core metrics from any account');
+      }
+
+      // Fetch zones list (needed for instant display)
+      const zonesPromises = accountIds.map(accountId =>
+        fetchEnterpriseZones(apiKey, accountId)
+      );
+      
+      const zonesResults = await Promise.allSettled(zonesPromises);
+      const allZones = zonesResults
+        .filter(result => result.status === 'fulfilled')
+        .flatMap(result => result.value);
+      
+      zonesCount = allZones.length;
+      zonesData = {
+        zones: allZones,
+        enterprise: zonesCount
+      };
+      console.log(`Pre-warm: ${zonesCount} zones found and cached`);
+    } else {
+      console.log('Pre-warm: App Services Core disabled - skipping fetch');
+    }
+    
+    // Fetch Bot Management if enabled
+    if (config?.applicationServices?.botManagement?.enabled && accountIds.length > 0) {
+      console.log('Pre-warm: Fetching Bot Management metrics...');
+      const botManagementConfig = config.applicationServices.botManagement;
+      
+      const botMgmtPromises = accountIds.map(accountId =>
+        fetchBotManagementForAccount(apiKey, accountId, botManagementConfig, env)
+          .then(data => ({ accountId, data })) // ✅ Include accountId with data
+      );
+      
+      const botMgmtResults = await Promise.allSettled(botMgmtPromises);
+      const botMgmtData = botMgmtResults
+        .filter(result => result.status === 'fulfilled' && result.value?.data) // Check data exists
+        .map(result => result.value); // Now has { accountId, data }
+      
+      // Aggregate bot management across accounts
+      if (botMgmtData.length > 0) {
+        // Merge timeSeries from all accounts
+        const timeSeriesMap = new Map();
+        botMgmtData.forEach(accountEntry => {
+          if (accountEntry.data.timeSeries) {
+            accountEntry.data.timeSeries.forEach(entry => {
+              const existing = timeSeriesMap.get(entry.month);
+              if (existing) {
+                existing.goodRequests += entry.goodRequests || 0;
+              } else {
+                timeSeriesMap.set(entry.month, {
+                  month: entry.month,
+                  timestamp: entry.timestamp,
+                  goodRequests: entry.goodRequests || 0,
+                });
+              }
+            });
+          }
+        });
+
+        const mergedTimeSeries = Array.from(timeSeriesMap.values())
+          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+        botManagementData = {
+          enabled: true,
+          threshold: botManagementConfig.threshold,
+          current: {
+            goodRequests: botMgmtData.reduce((sum, entry) => sum + entry.data.current.goodRequests, 0),
+            zones: botMgmtData.flatMap(entry => entry.data.current.zones),
+          },
+          previous: {
+            goodRequests: botMgmtData.reduce((sum, entry) => sum + entry.data.previous.goodRequests, 0),
+            zones: botMgmtData.flatMap(entry => entry.data.previous.zones),
+          },
+          timeSeries: mergedTimeSeries,
+          // Store per-account data for filtering
+          perAccountData: botMgmtData.map(entry => ({
+            accountId: entry.accountId, // ✅ Use correct accountId
+            current: entry.data.current,
+            previous: entry.data.previous,
+            timeSeries: entry.data.timeSeries,
+          })),
+        };
+        console.log(`Pre-warm: Bot Management data fetched (${botManagementData.current.zones.length} zones, ${mergedTimeSeries.length} months)`);
+      }
+    } else {
+      console.log('Pre-warm: Bot Management disabled - skipping fetch');
+    }
+    
+    // Fetch API Shield if enabled (reuses existing zone data!)
+    let apiShieldData = null;
+    if (config?.applicationServices?.apiShield?.enabled && successfulMetrics && successfulMetrics.length > 0) {
+      console.log('Pre-warm: Calculating API Shield metrics from existing zone data...');
+      const apiShieldConfig = config.applicationServices.apiShield;
+      
+      const apiShieldPromises = successfulMetrics.map(accountData =>
+        calculateZoneBasedAddonForAccount(accountData, apiShieldConfig, env, 'api-shield')
+          .then(data => ({ accountId: accountData.accountId, data }))
+      );
+      
+      const apiShieldResults = await Promise.allSettled(apiShieldPromises);
+      const apiShieldAccounts = apiShieldResults
+        .filter(result => result.status === 'fulfilled' && result.value?.data)
+        .map(result => result.value);
+      
+      if (apiShieldAccounts.length > 0) {
+        const timeSeriesMap = new Map();
+        apiShieldAccounts.forEach(accountEntry => {
+          if (accountEntry.data.timeSeries) {
+            accountEntry.data.timeSeries.forEach(entry => {
+              const existing = timeSeriesMap.get(entry.month);
+              if (existing) {
+                existing.requests += entry.requests || 0;
+              } else {
+                timeSeriesMap.set(entry.month, {
+                  month: entry.month,
+                  timestamp: entry.timestamp,
+                  requests: entry.requests || 0,
+                });
+              }
+            });
+          }
+        });
+
+        const mergedTimeSeries = Array.from(timeSeriesMap.values())
+          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+        apiShieldData = {
+          enabled: true,
+          threshold: apiShieldConfig.threshold,
+          current: {
+            requests: apiShieldAccounts.reduce((sum, entry) => sum + entry.data.current.requests, 0),
+            zones: apiShieldAccounts.flatMap(entry => entry.data.current.zones),
+          },
+          previous: {
+            requests: apiShieldAccounts.reduce((sum, entry) => sum + entry.data.previous.requests, 0),
+            zones: apiShieldAccounts.flatMap(entry => entry.data.previous.zones),
+          },
+          timeSeries: mergedTimeSeries,
+          perAccountData: apiShieldAccounts.map(entry => ({
+            accountId: entry.accountId,
+            current: entry.data.current,
+            previous: entry.data.previous,
+            timeSeries: entry.data.timeSeries,
+          })),
+        };
+        console.log(`Pre-warm: API Shield data calculated (${apiShieldData.current.zones.length} zones, ${mergedTimeSeries.length} months)`);
+      }
+    } else {
+      console.log('Pre-warm: API Shield disabled - skipping calculation');
+    }
+    
+    // Fetch Page Shield if enabled (reuses existing zone data!)
+    let pageShieldData = null;
+    if (config?.applicationServices?.pageShield?.enabled && successfulMetrics && successfulMetrics.length > 0) {
+      console.log('Pre-warm: Calculating Page Shield metrics from existing zone data...');
+      const pageShieldConfig = config.applicationServices.pageShield;
+      
+      const pageShieldPromises = successfulMetrics.map(accountData =>
+        calculateZoneBasedAddonForAccount(accountData, pageShieldConfig, env, 'page-shield')
+          .then(data => ({ accountId: accountData.accountId, data }))
+      );
+      
+      const pageShieldResults = await Promise.allSettled(pageShieldPromises);
+      const pageShieldAccounts = pageShieldResults
+        .filter(result => result.status === 'fulfilled' && result.value?.data)
+        .map(result => result.value);
+      
+      if (pageShieldAccounts.length > 0) {
+        const timeSeriesMap = new Map();
+        pageShieldAccounts.forEach(accountEntry => {
+          if (accountEntry.data.timeSeries) {
+            accountEntry.data.timeSeries.forEach(entry => {
+              const existing = timeSeriesMap.get(entry.month);
+              if (existing) {
+                existing.requests += entry.requests || 0;
+              } else {
+                timeSeriesMap.set(entry.month, {
+                  month: entry.month,
+                  timestamp: entry.timestamp,
+                  requests: entry.requests || 0,
+                });
+              }
+            });
+          }
+        });
+
+        const mergedTimeSeries = Array.from(timeSeriesMap.values())
+          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+        pageShieldData = {
+          enabled: true,
+          threshold: pageShieldConfig.threshold,
+          current: {
+            requests: pageShieldAccounts.reduce((sum, entry) => sum + entry.data.current.requests, 0),
+            zones: pageShieldAccounts.flatMap(entry => entry.data.current.zones),
+          },
+          previous: {
+            requests: pageShieldAccounts.reduce((sum, entry) => sum + entry.data.previous.requests, 0),
+            zones: pageShieldAccounts.flatMap(entry => entry.data.previous.zones),
+          },
+          timeSeries: mergedTimeSeries,
+          perAccountData: pageShieldAccounts.map(entry => ({
+            accountId: entry.accountId,
+            current: entry.data.current,
+            previous: entry.data.previous,
+            timeSeries: entry.data.timeSeries,
+          })),
+        };
+        console.log(`Pre-warm: Page Shield data calculated (${pageShieldData.current.zones.length} zones, ${mergedTimeSeries.length} months)`);
+      }
+    } else {
+      console.log('Pre-warm: Page Shield disabled - skipping calculation');
+    }
+    
+    // Fetch Advanced Rate Limiting if enabled (reuses existing zone data!)
+    let advancedRateLimitingData = null;
+    if (config?.applicationServices?.advancedRateLimiting?.enabled && successfulMetrics && successfulMetrics.length > 0) {
+      console.log('Pre-warm: Calculating Advanced Rate Limiting metrics from existing zone data...');
+      const rateLimitingConfig = config.applicationServices.advancedRateLimiting;
+      
+      const rateLimitingPromises = successfulMetrics.map(accountData =>
+        calculateZoneBasedAddonForAccount(accountData, rateLimitingConfig, env, 'advanced-rate-limiting')
+          .then(data => ({ accountId: accountData.accountId, data }))
+      );
+      
+      const rateLimitingResults = await Promise.allSettled(rateLimitingPromises);
+      const rateLimitingAccounts = rateLimitingResults
+        .filter(result => result.status === 'fulfilled' && result.value?.data)
+        .map(result => result.value);
+      
+      if (rateLimitingAccounts.length > 0) {
+        const timeSeriesMap = new Map();
+        rateLimitingAccounts.forEach(accountEntry => {
+          if (accountEntry.data.timeSeries) {
+            accountEntry.data.timeSeries.forEach(entry => {
+              const existing = timeSeriesMap.get(entry.month);
+              if (existing) {
+                existing.requests += entry.requests || 0;
+              } else {
+                timeSeriesMap.set(entry.month, {
+                  month: entry.month,
+                  timestamp: entry.timestamp,
+                  requests: entry.requests || 0,
+                });
+              }
+            });
+          }
+        });
+
+        const mergedTimeSeries = Array.from(timeSeriesMap.values())
+          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+        advancedRateLimitingData = {
+          enabled: true,
+          threshold: rateLimitingConfig.threshold,
+          current: {
+            requests: rateLimitingAccounts.reduce((sum, entry) => sum + entry.data.current.requests, 0),
+            zones: rateLimitingAccounts.flatMap(entry => entry.data.current.zones),
+          },
+          previous: {
+            requests: rateLimitingAccounts.reduce((sum, entry) => sum + entry.data.previous.requests, 0),
+            zones: rateLimitingAccounts.flatMap(entry => entry.data.previous.zones),
+          },
+          timeSeries: mergedTimeSeries,
+          perAccountData: rateLimitingAccounts.map(entry => ({
+            accountId: entry.accountId,
+            current: entry.data.current,
+            previous: entry.data.previous,
+            timeSeries: entry.data.timeSeries,
+          })),
+        };
+        console.log(`Pre-warm: Advanced Rate Limiting data calculated (${advancedRateLimitingData.current.zones.length} zones, ${mergedTimeSeries.length} months)`);
+      }
+    } else {
+      console.log('Pre-warm: Advanced Rate Limiting disabled - skipping calculation');
+    }
+    
+    // Store in cache with timestamp (only enabled metrics)
+    const cacheKey = `pre-warmed:${accountIds.join(',')}`;
+    const cacheData = {
+      timestamp: Date.now(),
+      data: {
+        ...(coreMetrics || {}),
+        zonesCount: zonesCount,
+        zones: zonesData, // ✅ Include full zones list for instant display
+        ...(botManagementData && { botManagement: botManagementData }),
+        ...(apiShieldData && { apiShield: apiShieldData }),
+        ...(pageShieldData && { pageShield: pageShieldData }),
+        ...(advancedRateLimitingData && { advancedRateLimiting: advancedRateLimitingData }),
+      },
+    };
+
+    // Cache for 6 hours (matching cron schedule)
+    await env.CONFIG_KV.put(cacheKey, JSON.stringify(cacheData), {
+      expirationTtl: 6 * 60 * 60, // 6 hours
+    });
+
+    const duration = Date.now() - startTime;
+    console.log(`✅ Pre-warm complete! Cached in ${(duration / 1000).toFixed(1)}s. Next dashboard load will be INSTANT! ⚡`);
+    
+  } catch (error) {
+    console.error('Pre-warm cache error:', error);
+  }
 }
 
 /**

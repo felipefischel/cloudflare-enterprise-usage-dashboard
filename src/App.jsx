@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import Dashboard from './components/Dashboard';
-import ConfigForm from './components/ConfigForm';
+import ConfigFormNew from './components/ConfigFormNew';
 import { Settings, Info, X, AlertTriangle } from 'lucide-react';
 
 function App() {
@@ -8,6 +8,8 @@ function App() {
   const [showConfig, setShowConfig] = useState(false);
   const [showAbout, setShowAbout] = useState(false);
   const [config, setConfig] = useState(null);
+  const [zones, setZones] = useState(null); // Shared zones state
+  const [refreshTrigger, setRefreshTrigger] = useState(0); // Trigger for forcing Dashboard refresh
 
   useEffect(() => {
     // Load saved configuration
@@ -68,9 +70,19 @@ function App() {
         throw new Error('Failed to save configuration');
       }
 
+      // Update config state immediately to trigger Dashboard re-render
       setConfig(newConfig);
       setIsConfigured(true);
       setShowConfig(false);
+      
+      // Scroll to top of page
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      
+      // Trigger Dashboard refresh to pick up new config (including disabled SKUs)
+      setRefreshTrigger(prev => prev + 1);
+      
+      // Note: Dashboard will show prewarming state automatically
+      // The Dashboard component will handle the cache prewarm on mount/config change
     } catch (error) {
       console.error('Failed to save config:', error);
       alert('Failed to save configuration. Please try again.');
@@ -112,11 +124,12 @@ function App() {
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {!isConfigured || showConfig ? (
-          <div className="max-w-2xl mx-auto">
-            <ConfigForm 
+          <div className="max-w-4xl mx-auto">
+            <ConfigFormNew 
               onSave={handleConfigSave} 
               initialConfig={config}
               onCancel={isConfigured ? () => setShowConfig(false) : null}
+              cachedZones={zones}
             />
           </div>
         ) : null}
@@ -124,7 +137,12 @@ function App() {
         {/* Keep Dashboard mounted but hidden when showing config */}
         {isConfigured && (
           <div className={showConfig ? 'hidden' : ''}>
-            <Dashboard config={config} />
+            <Dashboard 
+              config={config}
+              zones={zones}
+              setZones={setZones}
+              refreshTrigger={refreshTrigger}
+            />
           </div>
         )}
       </main>
@@ -175,7 +193,7 @@ function App() {
               <div>
                 <h3 className="text-lg font-semibold text-gray-900 mb-3">What is this?</h3>
                 <p className="text-gray-700 leading-relaxed mb-3">
-                  The <strong>Enterprise Usage Dashboard</strong> is a tool that helps Cloudflare Enterprise customers monitor their usage against contracted thresholds. It provides real-time visibility into your zones, bandwidth, HTTP requests, and DNS queries.
+                  The <strong>Enterprise Usage Dashboard</strong> is a tool that helps Cloudflare Enterprise customers monitor their usage against contracted thresholds. It provides real-time visibility into your contracted services.
                 </p>
               </div>
 
@@ -183,14 +201,14 @@ function App() {
               <div>
                 <h3 className="text-lg font-semibold text-gray-900 mb-3">How it works</h3>
                 <p className="text-gray-700 leading-relaxed mb-3">
-                  The dashboard uses <strong>Cloudflare's GraphQL Analytics API</strong> to query your account's usage data. It fetches metrics such as:
+                  The dashboard uses <strong>Cloudflare's GraphQL Analytics API</strong> to query your account's usage data. It can fetch metrics such as:
                 </p>
                 <ul className="list-disc list-inside text-gray-700 space-y-2 ml-4">
-                  <li>Enterprise zone counts (primary/secondary)</li>
-                  <li>HTTP request volumes (total, blocked, and clean traffic)</li>
-                  <li>Data transfer (bandwidth in TB)</li>
+                  <li>Enterprise zone counts</li>
+                  <li>HTTP request volumes</li>
+                  <li>Data transfer</li>
                   <li>DNS query volumes</li>
-                  <li>Per-zone breakdowns and historical trends</li>
+                  <li>And many more products!</li>
                 </ul>
               </div>
 
@@ -205,11 +223,19 @@ function App() {
                 </ul>
               </div>
 
+              {/* Attack Traffic */}
+              <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+                <h3 className="text-sm font-semibold text-green-900 mb-2">🛡️ Attack Traffic Not Charged</h3>
+                <p className="text-sm text-green-800 leading-relaxed">
+                  Cloudflare does not charge for attack traffic blocked by security features (DDoS, WAF, rate limiting, bot management, etc.). The <strong>HTTP Requests</strong> and <strong>Data Transfer</strong> metrics shown in this dashboard automatically exclude blocked traffic and reflect only billable/clean traffic that reached your origin or was served from cache.
+                </p>
+              </div>
+
               {/* Data Accuracy */}
               <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
                 <h3 className="text-sm font-semibold text-blue-900 mb-2">📊 Data Accuracy</h3>
                 <p className="text-sm text-blue-800">
-                  This dashboard queries the same GraphQL API that powers your Cloudflare dashboard. However, slight differences may occur due to caching, timing of queries, and data processing. For billing purposes, always rely on official Cloudflare invoices.
+                  This dashboard queries the same GraphQL API that powers your Cloudflare dashboard. While this data can be a pretty good indication of general usage, it relies on sampling, therefore for billing purposes, always rely on official Cloudflare data and invoices.
                 </p>
               </div>
             </div>

@@ -47,52 +47,59 @@ function ZonesList({ zones, zoneMetrics, usePreviousClassification = false, prev
   };
 
   return (
-    <div className="max-h-96 overflow-y-auto pr-2 space-y-2">
-      {sortedZones.map((zone, index) => (
-        <div 
-          key={zone.id} 
-          className="flex items-center justify-between p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors"
-        >
-          <div className="flex items-center space-x-3 flex-1 min-w-0">
-            <div className="flex-shrink-0 w-8 h-8 bg-gradient-to-br from-slate-600 to-slate-700 rounded-lg flex items-center justify-center">
-              <span className="text-white text-sm font-semibold">
-                {index + 1}
-              </span>
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center space-x-2">
-                <p className="font-medium text-gray-900 truncate">{zone.name}</p>
-                {zone.isPrimary !== undefined && (
-                  <span className={`px-2 py-0.5 text-xs font-medium rounded ${
-                    zone.isPrimary 
-                      ? 'bg-green-100 text-green-700' 
-                      : 'bg-blue-100 text-blue-700'
-                  }`}>
-                    {zone.isPrimary ? 'Primary' : 'Secondary'}
-                  </span>
-                )}
-              </div>
-              <p className="text-xs text-gray-500 font-mono truncate">{zone.id}</p>
-            </div>
-          </div>
-          {zoneMetrics && (
-            <div className="flex items-center space-x-4 text-sm">
-              <div className="text-right">
-                <p className="text-xs text-gray-500">Data Transfer</p>
-                <p className="font-semibold text-gray-900">{formatBandwidth(zone.bytes)}</p>
-              </div>
-              <div className="text-right">
-                <p className="text-xs text-gray-500">Billable Requests</p>
-                <p className="font-semibold text-gray-900">{formatRequests(zone.cleanRequests || zone.requests || 0)}</p>
-              </div>
-              <div className="text-right">
-                <p className="text-xs text-gray-500">DNS Queries</p>
-                <p className="font-semibold text-gray-900">{formatRequests(zone.dnsQueries || 0)}</p>
-              </div>
-            </div>
-          )}
-        </div>
-      ))}
+    <div className="bg-gray-50 border border-gray-200 rounded-lg overflow-hidden">
+      <div className="max-h-96 overflow-y-auto">
+        <table className="min-w-full divide-y divide-gray-200">
+          <thead className="bg-gray-100 sticky top-0 z-10">
+            <tr>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                Zone
+              </th>
+              <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
+                Type
+              </th>
+              <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                Data Transfer
+              </th>
+              <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                HTTP Requests
+              </th>
+              <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                DNS Queries
+              </th>
+            </tr>
+          </thead>
+          <tbody className="bg-white divide-y divide-gray-200">
+            {sortedZones.map((zone) => (
+              <tr key={zone.id} className="hover:bg-gray-50">
+                <td className="px-6 py-4 whitespace-nowrap">
+                  <div className="text-sm font-medium text-gray-900">{zone.name}</div>
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap text-center">
+                  {zone.isPrimary !== undefined && (
+                    <span className={`px-2 py-1 text-xs font-medium rounded ${
+                      zone.isPrimary 
+                        ? 'bg-green-100 text-green-700' 
+                        : 'bg-blue-100 text-blue-700'
+                    }`}>
+                      {zone.isPrimary ? 'Primary' : 'Secondary'}
+                    </span>
+                  )}
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-900 font-medium">
+                  {formatBandwidth(zone.bytes)}
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-900 font-medium">
+                  {formatRequests(zone.cleanRequests || zone.requests || 0)}
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-900 font-medium">
+                  {formatRequests(zone.dnsQueries || 0)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

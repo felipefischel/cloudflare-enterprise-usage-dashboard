@@ -79,32 +79,28 @@ function MetricCard({
   const isWarning = threshold && numPercentage >= 90 && numPercentage <= 100;
 
   return (
-    <div className={`rounded-lg shadow-sm border-2 transition-all hover:shadow-md ${
-      isOverThreshold ? 'border-red-300 bg-red-50' : 
-      isWarning ? 'border-orange-300 bg-orange-50' : 
-      'border-gray-200 bg-white'
-    }`}>
+    <div 
+      className={`rounded-lg shadow-sm border-2 transition-all duration-200 ${
+        isOverThreshold ? 'border-red-300 bg-red-50' : 
+        isWarning ? 'border-orange-300 bg-orange-50' : 
+        'border-gray-200 bg-white hover:shadow-lg hover:-translate-y-0.5'
+      }`}
+    >
       <div className={compact ? "p-4" : "p-6"}>
         {/* Header with Zone Breakdown */}
         <div className="flex items-start justify-between mb-4">
           <div className="flex-1">
-            <div className={`flex items-center ${compact ? 'mb-2' : 'mb-4'}`}>
-              <div className={`${compact ? 'p-2' : 'p-3'} rounded-lg ${
-                isOverThreshold ? 'bg-red-100 text-red-600' :
-                isWarning ? 'bg-orange-100 text-orange-700' :
-                'bg-blue-50 text-blue-600'
-              }`}>
-                {getIcon()}
-              </div>
+            {/* Title - Large */}
+            <div className="flex items-center space-x-2 mb-2">
+              <h3 className={`${compact ? 'text-base' : 'text-xl'} font-medium text-gray-900`}>
+                {title}
+              </h3>
               {isOverThreshold && (
-                <AlertCircle className={`${compact ? "w-4 h-4" : "w-5 h-5"} text-red-600 ml-2`} />
+                <AlertCircle className={`${compact ? "w-4 h-4" : "w-5 h-5"} text-red-600 flex-shrink-0`} />
               )}
             </div>
-
-            {/* Title */}
-            <h3 className={`${compact ? 'text-xs' : 'text-sm'} font-medium text-gray-600 mb-1`}>{title}</h3>
             {subtitle && (
-              <p className="text-xs text-gray-500 mb-2">{subtitle}</p>
+              <p className="text-sm text-gray-600 mb-2">{subtitle}</p>
             )}
           </div>
 
