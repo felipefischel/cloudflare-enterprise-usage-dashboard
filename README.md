@@ -2,23 +2,27 @@
 
 A real-time dashboard for Cloudflare Enterprise customers to monitor their monthly consumption against contracted limits. Built with Cloudflare Workers, React, and Vite.
 
-<img width="649" height="832" alt="Ent-Dash" src="https://github.com/user-attachments/assets/b2e49e4c-d820-4ec2-9b2e-ea03ce8a53ab" />
+<img width="857" height="935" alt="Screenshot 2025-11-06 at 17 30 08" src="https://github.com/user-attachments/assets/68b8c7c4-a3e4-4e5a-a9ae-aa77471bd20a" />
+
+<img width="823" height="868" alt="Screenshot 2025-11-06 at 17 30 24" src="https://github.com/user-attachments/assets/0249c863-1bd9-47fa-8870-9fca098aad69" />
+
 
 ## ⚠️ Important Disclaimer
 
-This is NOT an official Cloudflare tool. Official billing data from Cloudflare may vary from the metrics shown here. Always refer to your official Cloudflare invoices and account dashboard for authoritative usage information.
+This is NOT an official Cloudflare tool. Official billing data from Cloudflare may vary from the metrics shown here. For authoritative usage information, always rely on official Cloudflare data and invoices.
 
 ## Features
 
 - 📊 **Real-time Usage Monitoring**: Track your contracted services:
-  - Enterprise Zones (primary/secondary)
-  - HTTP Requests (clean traffic only)
-  - Data Transfer (clean traffic only)
+  - Enterprise Zones
+  - HTTP Requests (billable traffic only)
+  - Data Transfer (bilable traffic only)
   - DNS Queries
   - Application Security products (Bot Management, API Shield, Page Shield, etc.)
   - Other add-on products
 
-- 🛡️ **Attack Traffic Excluded**: HTTP Requests and Data Transfer metrics automatically exclude traffic blocked by Cloudflare's security features (DDoS, WAF, rate limiting, bot management, etc.) - matching how Cloudflare bills
+- 🛡️ **Blocked Traffic Excluded**:
+Cloudflare does not charge for traffic blocked by security features (DDoS, WAF, etc.). The HTTP Requests and Data Transfer metrics shown in this dashboard automatically exclude blocked traffic and reflect only billable/clean traffic that reached your origin or was served from cache.
 
 - 📈 **Usage Analytics**:
   - Current month vs. previous month comparison
@@ -75,7 +79,7 @@ The easiest way to get started is using the **Deploy to Cloudflare** button abov
 
    This allows you to restrict access to yourself, your teammates, your organization, or anyone else you specify.
 
-**That's it! Your dashboard is ready to use.** ✨
+**That's it! Your dashboard is ready to use.**
 
 ## Manual Deployment
 
@@ -199,6 +203,7 @@ The dashboard includes a **Cloudflare Cron Trigger** that automatically checks t
 - **Alert tracking**: Prevents duplicate notifications
 - **Data source**: GraphQL Analytics API (same API that powers your Cloudflare dashboard)
 - **Sampling**: This dashboard relies on sampled data - for billing purposes, always refer to official Cloudflare data and invoices
+- **Confidence Levels**: Each metric includes a confidence indicator based on a 95% confidence interval from Cloudflare's adaptive sampling. Higher confidence percentages (closer to 100%) indicate more accurate estimates. Hover over the confidence badge to see detailed statistics including sample size and confidence range.
 
 ## Troubleshooting
 

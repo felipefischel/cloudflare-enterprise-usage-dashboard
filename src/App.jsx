@@ -36,7 +36,6 @@ function App() {
               config: data,
             }),
           });
-          console.log('Config migrated from accountId to accountIds');
         } catch (migrationError) {
           console.error('Failed to save migrated config:', migrationError);
         }
@@ -183,7 +182,7 @@ function App() {
                   <div>
                     <h3 className="text-sm font-bold text-yellow-800 mb-2">⚠️ Important Disclaimer</h3>
                     <p className="text-sm text-yellow-700">
-                      <strong>This is NOT an official Cloudflare tool.</strong> Official billing data from Cloudflare may vary from the metrics shown here. Always refer to your official Cloudflare invoices and account dashboard for authoritative usage information.
+                      <strong>This is NOT an official Cloudflare tool.</strong> Official billing data from Cloudflare may vary from the metrics shown here. For authoritative usage information, always rely on official Cloudflare data and invoices.
                     </p>
                   </div>
                 </div>
@@ -223,19 +222,19 @@ function App() {
                 </ul>
               </div>
 
-              {/* Attack Traffic */}
+              {/* Blocked Traffic */}
               <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-                <h3 className="text-sm font-semibold text-green-900 mb-2">🛡️ Attack Traffic Not Charged</h3>
+                <h3 className="text-sm font-semibold text-green-900 mb-2">🛡️ Blocked Traffic Not Charged</h3>
                 <p className="text-sm text-green-800 leading-relaxed">
-                  Cloudflare does not charge for attack traffic blocked by security features (DDoS, WAF, rate limiting, bot management, etc.). The <strong>HTTP Requests</strong> and <strong>Data Transfer</strong> metrics shown in this dashboard automatically exclude blocked traffic and reflect only billable/clean traffic that reached your origin or was served from cache.
+                  Cloudflare does not charge for traffic blocked by security features (DDoS, WAF, etc.). The <strong>HTTP Requests</strong> and <strong>Data Transfer</strong> metrics shown in this dashboard automatically exclude blocked traffic and reflect only billable/clean traffic that reached your origin or was served from cache.
                 </p>
               </div>
 
               {/* Data Accuracy */}
               <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
                 <h3 className="text-sm font-semibold text-blue-900 mb-2">📊 Data Accuracy</h3>
-                <p className="text-sm text-blue-800">
-                  This dashboard queries the same GraphQL API that powers your Cloudflare dashboard. While this data can be a pretty good indication of general usage, it relies on sampling, therefore for billing purposes, always rely on official Cloudflare data and invoices.
+                <p className="text-sm text-blue-800 leading-relaxed">
+                  This dashboard queries the same GraphQL API that powers your Cloudflare dashboard. While this data provides a good indication of general usage, it relies on sampling. Each metric on the dashboard includes a Confidence Level metric, based on a 95% confidence interval from Cloudflare's adaptive sampling. For billing purposes, always rely on official Cloudflare data and invoices.
                 </p>
               </div>
             </div>

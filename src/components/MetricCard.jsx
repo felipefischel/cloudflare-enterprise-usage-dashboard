@@ -1,5 +1,6 @@
 import React from 'react';
 import { Globe, Activity, Database, TrendingUp, TrendingDown, AlertCircle, Shield, CheckCircle, Network } from 'lucide-react';
+import { ConfidenceBadge } from './ConfidenceIndicator';
 
 function MetricCard({ 
   title, 
@@ -16,7 +17,9 @@ function MetricCard({
   zoneBreakdown = null,
   primaryZones = null,
   secondaryZones = null,
-  requestBreakdown = null
+  confidence = null,
+  isZoneFiltered = false,
+  confidenceMetricType = 'HTTP requests'
 }) {
   const getIcon = () => {
     switch (icon) {
@@ -40,22 +43,30 @@ function MetricCard({
   const formatThreshold = (value) => {
     if (!value) return '0';
     
+    // Helper to round and remove unnecessary trailing zeros
+    const cleanNumber = (num) => {
+      // Round to 2 decimal places
+      const rounded = Math.round(num * 100) / 100;
+      // parseFloat removes trailing zeros automatically
+      return parseFloat(rounded.toFixed(2)).toString();
+    };
+    
     // Format based on metric type
     if (icon === 'bandwidth') {
-      // Format as TB or GB
-      const tb = value / (1024 ** 4);
+      // Format as TB or GB using decimal units (1000-based)
+      const tb = value / (1000 ** 4);
       if (tb >= 1) {
-        return `${tb.toFixed(2)} TB`;
+        return `${cleanNumber(tb)} TB`;
       } else {
-        const gb = value / (1024 ** 3);
-        return `${gb.toFixed(2)} GB`;
+        const gb = value / (1000 ** 3);
+        return `${cleanNumber(gb)} GB`;
       }
-    } else if (icon === 'requests' || icon === 'check' || icon === 'dns') {
-      // Format as M or K
+    } else if (icon === 'requests' || icon === 'check' || icon === 'dns' || icon === 'traffic' || icon === 'shield') {
+      // Format as M or K, removing unnecessary decimals
       if (value >= 1e6) {
-        return `${(value / 1e6).toFixed(2)}M`;
+        return `${cleanNumber(value / 1e6)}M`;
       } else {
-        return `${(value / 1e3).toFixed(2)}K`;
+        return `${cleanNumber(value / 1e3)}K`;
       }
     } else {
       // Default: just add commas
@@ -80,7 +91,7 @@ function MetricCard({
 
   return (
     <div 
-      className={`rounded-lg shadow-sm border-2 transition-all duration-200 ${
+      className={`rounded-lg shadow-sm border-2 transition-all duration-200 relative z-0 has-[.confidence-badge-group:hover]:z-[9999] ${
         isOverThreshold ? 'border-red-300 bg-red-50' : 
         isWarning ? 'border-orange-300 bg-orange-50' : 
         'border-gray-200 bg-white hover:shadow-lg hover:-translate-y-0.5'
@@ -97,6 +108,15 @@ function MetricCard({
               </h3>
               {isOverThreshold && (
                 <AlertCircle className={`${compact ? "w-4 h-4" : "w-5 h-5"} text-red-600 flex-shrink-0`} />
+              )}
+              {confidence && (
+                <ConfidenceBadge 
+                  confidence={confidence} 
+                  metricName={title} 
+                  isZoneFiltered={isZoneFiltered}
+                  actualValue={isZoneFiltered ? value : null}
+                  metricType={confidenceMetricType}
+                />
               )}
             </div>
             {subtitle && (
@@ -115,26 +135,6 @@ function MetricCard({
                 <div className="flex items-center space-x-2">
                   <span className="text-gray-700 whitespace-nowrap">🔵 Secondary:</span>
                   <span className="font-semibold text-gray-900">{zoneBreakdown.secondary || 0}/{secondaryZones || 0}</span>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Request Breakdown - Top Right */}
-          {requestBreakdown && (
-            <div className="ml-4 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
-              <div className="space-y-1 text-xs">
-                <div className="flex items-center space-x-2">
-                  <span className="text-gray-700 whitespace-nowrap">📊 Total:</span>
-                  <span className="font-semibold text-gray-900">
-                    {(requestBreakdown.total / 1e6).toFixed(2)}M
-                  </span>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <span className="text-gray-700 whitespace-nowrap">🛡️ Blocked:</span>
-                  <span className="font-semibold text-gray-900">
-                    {(requestBreakdown.blocked / 1e6).toFixed(2)}M
-                  </span>
                 </div>
               </div>
             </div>

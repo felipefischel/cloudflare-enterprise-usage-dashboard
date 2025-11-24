@@ -208,7 +208,6 @@ async function getMetricsProgressive(request, env, corsHeaders) {
     const cachedData = await env.CONFIG_KV.get(cacheKey, 'json');
     
     if (cachedData && cachedData.data) {
-      console.log(`Cache HIT: Pre-warmed data available (age: ${Math.floor((Date.now() - cachedData.timestamp) / 1000)}s)`);
       
       // Check if cache is complete (has all ENABLED metrics)
       const configData = await env.CONFIG_KV.get('config:default');
@@ -219,20 +218,16 @@ async function getMetricsProgressive(request, env, corsHeaders) {
         
         // Check App Services Core
         if (config?.applicationServices?.core?.enabled && !cachedData.data.current) {
-          console.log('⚠️ Cache is incomplete: App Services Core enabled but not cached');
           cacheIsComplete = false;
         }
         
         // Check Bot Management
         if (config?.applicationServices?.botManagement?.enabled) {
           if (!cachedData.data.botManagement) {
-            console.log('⚠️ Cache is incomplete: Bot Management enabled but not cached');
             cacheIsComplete = false;
           } else if (!cachedData.data.botManagement.timeSeries) {
-            console.log('⚠️ Cache is incomplete: Bot Management missing timeSeries data');
             cacheIsComplete = false;
           } else if (!cachedData.data.botManagement.perAccountData) {
-            console.log('⚠️ Cache is incomplete: Bot Management missing perAccountData for account filtering');
             cacheIsComplete = false;
           }
         }
@@ -240,13 +235,10 @@ async function getMetricsProgressive(request, env, corsHeaders) {
         // Check API Shield
         if (config?.applicationServices?.apiShield?.enabled) {
           if (!cachedData.data.apiShield) {
-            console.log('⚠️ Cache is incomplete: API Shield enabled but not cached');
             cacheIsComplete = false;
           } else if (!cachedData.data.apiShield.timeSeries) {
-            console.log('⚠️ Cache is incomplete: API Shield missing timeSeries data');
             cacheIsComplete = false;
           } else if (!cachedData.data.apiShield.perAccountData) {
-            console.log('⚠️ Cache is incomplete: API Shield missing perAccountData for account filtering');
             cacheIsComplete = false;
           }
         }
@@ -254,13 +246,10 @@ async function getMetricsProgressive(request, env, corsHeaders) {
         // Check Page Shield
         if (config?.applicationServices?.pageShield?.enabled) {
           if (!cachedData.data.pageShield) {
-            console.log('⚠️ Cache is incomplete: Page Shield enabled but not cached');
             cacheIsComplete = false;
           } else if (!cachedData.data.pageShield.timeSeries) {
-            console.log('⚠️ Cache is incomplete: Page Shield missing timeSeries data');
             cacheIsComplete = false;
           } else if (!cachedData.data.pageShield.perAccountData) {
-            console.log('⚠️ Cache is incomplete: Page Shield missing perAccountData for account filtering');
             cacheIsComplete = false;
           }
         }
@@ -268,13 +257,10 @@ async function getMetricsProgressive(request, env, corsHeaders) {
         // Check Advanced Rate Limiting
         if (config?.applicationServices?.advancedRateLimiting?.enabled) {
           if (!cachedData.data.advancedRateLimiting) {
-            console.log('⚠️ Cache is incomplete: Advanced Rate Limiting enabled but not cached');
             cacheIsComplete = false;
           } else if (!cachedData.data.advancedRateLimiting.timeSeries) {
-            console.log('⚠️ Cache is incomplete: Advanced Rate Limiting missing timeSeries data');
             cacheIsComplete = false;
           } else if (!cachedData.data.advancedRateLimiting.perAccountData) {
-            console.log('⚠️ Cache is incomplete: Advanced Rate Limiting missing perAccountData for account filtering');
             cacheIsComplete = false;
           }
         }
@@ -287,7 +273,6 @@ async function getMetricsProgressive(request, env, corsHeaders) {
       
       // Only use cache if it's complete
       if (cacheIsComplete) {
-        console.log('✅ Using complete cached data');
         return new Response(
           JSON.stringify({ 
             ...cachedData.data,
@@ -377,12 +362,12 @@ async function getMetricsProgressive(request, env, corsHeaders) {
             accountEntry.data.timeSeries.forEach(entry => {
               const existing = timeSeriesMap.get(entry.month);
               if (existing) {
-                existing.goodRequests += entry.goodRequests || 0;
+                existing.likelyHuman += entry.likelyHuman || 0;
               } else {
                 timeSeriesMap.set(entry.month, {
                   month: entry.month,
                   timestamp: entry.timestamp,
-                  goodRequests: entry.goodRequests || 0,
+                  likelyHuman: entry.likelyHuman || 0,
                 });
               }
             });
@@ -392,15 +377,19 @@ async function getMetricsProgressive(request, env, corsHeaders) {
         const mergedTimeSeries = Array.from(timeSeriesMap.values())
           .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
 
+        // Aggregate confidence from all accounts
+        const botManagementConfidence = botMgmtData.find(entry => entry.data.current?.confidence)?.data.current.confidence || null;
+
         botManagementData = {
           enabled: true,
           threshold: botManagementConfig.threshold,
           current: {
-            goodRequests: botMgmtData.reduce((sum, entry) => sum + entry.data.current.goodRequests, 0),
+            likelyHuman: botMgmtData.reduce((sum, entry) => sum + entry.data.current.likelyHuman, 0),
             zones: botMgmtData.flatMap(entry => entry.data.current.zones),
+            confidence: botManagementConfidence,
           },
           previous: {
-            goodRequests: botMgmtData.reduce((sum, entry) => sum + entry.data.previous.goodRequests, 0),
+            likelyHuman: botMgmtData.reduce((sum, entry) => sum + entry.data.previous.likelyHuman, 0),
             zones: botMgmtData.flatMap(entry => entry.data.previous.zones),
           },
           timeSeries: mergedTimeSeries,
@@ -456,12 +445,16 @@ async function getMetricsProgressive(request, env, corsHeaders) {
         const mergedTimeSeries = Array.from(timeSeriesMap.values())
           .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
 
+        // Aggregate confidence from all accounts (use first non-null confidence as they should all be the same)
+        const apiShieldConfidence = apiShieldAccounts.find(entry => entry.data.current?.confidence)?.data.current.confidence || null;
+
         apiShieldData = {
           enabled: true,
           threshold: apiShieldConfig.threshold,
           current: {
             requests: apiShieldAccounts.reduce((sum, entry) => sum + entry.data.current.requests, 0),
             zones: apiShieldAccounts.flatMap(entry => entry.data.current.zones),
+            confidence: apiShieldConfidence,
           },
           previous: {
             requests: apiShieldAccounts.reduce((sum, entry) => sum + entry.data.previous.requests, 0),
@@ -520,12 +513,16 @@ async function getMetricsProgressive(request, env, corsHeaders) {
         const mergedTimeSeries = Array.from(timeSeriesMap.values())
           .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
 
+        // Aggregate confidence from all accounts (use first non-null confidence as they should all be the same)
+        const pageShieldConfidence = pageShieldAccounts.find(entry => entry.data.current?.confidence)?.data.current.confidence || null;
+
         pageShieldData = {
           enabled: true,
           threshold: pageShieldConfig.threshold,
           current: {
             requests: pageShieldAccounts.reduce((sum, entry) => sum + entry.data.current.requests, 0),
             zones: pageShieldAccounts.flatMap(entry => entry.data.current.zones),
+            confidence: pageShieldConfidence,
           },
           previous: {
             requests: pageShieldAccounts.reduce((sum, entry) => sum + entry.data.previous.requests, 0),
@@ -584,12 +581,16 @@ async function getMetricsProgressive(request, env, corsHeaders) {
         const mergedTimeSeries = Array.from(timeSeriesMap.values())
           .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
 
+        // Aggregate confidence from all accounts (use first non-null confidence as they should all be the same)
+        const rateLimitingConfidence = rateLimitingAccounts.find(entry => entry.data.current?.confidence)?.data.current.confidence || null;
+
         advancedRateLimitingData = {
           enabled: true,
           threshold: rateLimitingConfig.threshold,
           current: {
             requests: rateLimitingAccounts.reduce((sum, entry) => sum + entry.data.current.requests, 0),
             zones: rateLimitingAccounts.flatMap(entry => entry.data.current.zones),
+            confidence: rateLimitingConfidence,
           },
           previous: {
             requests: rateLimitingAccounts.reduce((sum, entry) => sum + entry.data.previous.requests, 0),
@@ -654,9 +655,7 @@ async function fetchPhase1Data(apiKey, accountIds, env) {
   // Otherwise return estimated/placeholder data
   const phase1Metrics = {
     current: {
-      totalRequests: 0,
-      blockedRequests: 0,
-      cleanRequests: 0,
+      requests: 0,
       bytes: 0,
       dnsQueries: 0,
     },
@@ -762,11 +761,12 @@ async function fetchAccountMetrics(apiKey, accountId, env) {
   const currentHour = now.getHours();
   
   // Try to get cached current month data (10 min TTL with hour-based key)
+  const CACHE_VERSION = 2; // Increment this when data structure changes
   const currentMonthCacheKey = `current-month:${accountId}:${currentYear}-${String(currentMonth).padStart(2, '0')}-${String(currentDay).padStart(2, '0')}-${String(Math.floor(currentHour / 1) * 1).padStart(2, '0')}`;
   const cachedCurrentMonth = await env.CONFIG_KV.get(currentMonthCacheKey, 'json');
   
-  // Check if we have a recent cache (within 10 minutes)
-  if (cachedCurrentMonth && cachedCurrentMonth.cachedAt) {
+  // Check if we have a recent cache (within 10 minutes) and correct version
+  if (cachedCurrentMonth && cachedCurrentMonth.cachedAt && cachedCurrentMonth.version === CACHE_VERSION) {
     const cacheAge = Date.now() - cachedCurrentMonth.cachedAt;
     if (cacheAge < 10 * 60 * 1000) { // 10 minutes
       console.log(`Using cached current month data for account ${accountId} (age: ${Math.floor(cacheAge / 1000)}s)`);
@@ -796,17 +796,11 @@ async function fetchAccountMetrics(apiKey, accountId, env) {
       accountId,
       accountName,
       current: {
-        totalRequests: 0,
-        blockedRequests: 0,
-        cleanRequests: 0,
+        requests: 0,
         bytes: 0,
         dnsQueries: 0,
-        requests: 0,
       },
       previous: {
-        totalRequests: 0,
-        blockedRequests: 0,
-        cleanRequests: 0,
         requests: 0,
         bytes: 0,
         dnsQueries: 0,
@@ -838,29 +832,52 @@ async function fetchAccountMetrics(apiKey, accountId, env) {
   const cachedPreviousMonth = await env.CONFIG_KV.get(`monthly-stats:${accountId}:${previousMonthKey}`, 'json');
 
   // Build GraphQL query for current month (Enterprise zones only)
-  // Use date format YYYY-MM-DD for httpRequests1dGroups
-  const currentMonthDateStart = currentMonthStart.toISOString().split('T')[0];
-  const currentMonthDateEnd = currentMonthEnd.toISOString().split('T')[0];
+  // Use datetime format for httpRequestsAdaptiveGroups with eyeball filter
+  const currentMonthDatetimeStart = currentMonthStart.toISOString();
+  const currentMonthDatetimeEnd = currentMonthEnd.toISOString();
   
-  // Query for total requests (main query only - firewall query causes issues)
+  // Query for clean/billable requests only (excludes blocked traffic)
   const currentMonthQuery = {
     operationName: 'GetEnterpriseZoneStats',
     variables: {
       zoneIds: zoneIds,
-      dateStart: currentMonthDateStart,
-      dateEnd: currentMonthDateEnd,
+      filter: {
+        AND: [
+          { datetime_geq: currentMonthDatetimeStart },
+          { datetime_leq: currentMonthDatetimeEnd },
+          { requestSource: 'eyeball' },
+          { securitySource_neq: 'l7ddos' },
+          { securityAction_neq: 'block' },
+          { securityAction_neq: 'challenge_failed' },
+          { securityAction_neq: 'jschallenge_failed' },
+          { securityAction_neq: 'managed_challenge_failed' }
+        ]
+      }
     },
-    query: `query GetEnterpriseZoneStats($zoneIds: [String!]!, $dateStart: String!, $dateEnd: String!) {
+    query: `query GetEnterpriseZoneStats($zoneIds: [String!]!, $filter: ZoneHttpRequestsAdaptiveGroupsFilter_InputObject) {
       viewer {
         zones(filter: {zoneTag_in: $zoneIds}) {
           zoneTag
-          httpRequests1dGroups(filter: {date_geq: $dateStart, date_leq: $dateEnd}, limit: 10000) {
+          totals: httpRequestsAdaptiveGroups(filter: $filter, limit: 1) {
+            count
             sum {
-              requests
-              bytes
+              edgeResponseBytes
             }
-            dimensions {
-              date
+            confidence(level: 0.95) {
+              count {
+                estimate
+                lower
+                upper
+                sampleSize
+              }
+              sum {
+                edgeResponseBytes {
+                  estimate
+                  lower
+                  upper
+                  sampleSize
+                }
+              }
             }
           }
         }
@@ -892,14 +909,16 @@ async function fetchAccountMetrics(apiKey, accountId, env) {
   }
 
   // Aggregate current month stats across all Enterprise zones
+  // Now tracking only clean/billable traffic directly
   let currentMonthTotal = { 
-    totalRequests: 0, 
-    blockedRequests: 0,
-    cleanRequests: 0,
-    totalBytes: 0,
-    blockedBytes: 0,
-    bytes: 0, // This will be clean/billable bytes
-    dnsQueries: 0
+    requests: 0,  // Clean/billable requests only
+    bytes: 0,     // Clean/billable bytes only
+    dnsQueries: 0,
+    confidence: {
+      requests: null,
+      bytes: null,
+      dnsQueries: null
+    }
   };
   
   // Create zone name lookup map
@@ -908,28 +927,71 @@ async function fetchAccountMetrics(apiKey, accountId, env) {
     zoneNameMap[z.id] = z.name;
   });
   
+  // Helper function to calculate confidence percentage from interval
+  const calculateConfidencePercentage = (confidence) => {
+    if (!confidence || !confidence.estimate) return null;
+    const estimate = confidence.estimate;
+    const lower = confidence.lower || estimate;
+    const upper = confidence.upper || estimate;
+    
+    // Calculate interval width as percentage of estimate
+    // Higher % = tighter interval = more confident
+    const intervalWidth = upper - lower;
+    const relativeWidth = intervalWidth / (2 * estimate);
+    const confidencePercent = Math.max(0, Math.min(100, 100 * (1 - relativeWidth)));
+    
+    return {
+      percent: Math.round(confidencePercent * 10) / 10, // Round to 1 decimal
+      sampleSize: confidence.sampleSize,
+      estimate: confidence.estimate,
+      lower: confidence.lower,
+      upper: confidence.upper
+    };
+  };
+  
+  // Aggregate confidence data for total requests, bytes, and DNS
+  let totalRequestsConfidenceData = { estimates: [], lowers: [], uppers: [], sampleSizes: [] };
+  let totalBytesConfidenceData = { estimates: [], lowers: [], uppers: [], sampleSizes: [] };
+  let totalDnsConfidenceData = { estimates: [], lowers: [], uppers: [], sampleSizes: [] };
+  
   // Track per-zone metrics for primary/secondary classification
   const zoneMetrics = [];
   const SECONDARY_ZONE_THRESHOLD = 50 * (1024 ** 3); // 50GB in bytes
   
   zones.forEach(zone => {
-    let zoneRequests = 0;
-    let zoneBytes = 0;
+    // Get aggregated totals (single result, no loop needed)
+    const totals = zone.totals?.[0];
+    const zoneRequests = totals?.count || 0;
+    const zoneBytes = totals?.sum?.edgeResponseBytes || 0;
     
-    // Aggregate traffic per zone
-    zone.httpRequests1dGroups.forEach(item => {
-      zoneRequests += item.sum.requests || 0;
-      zoneBytes += item.sum.bytes || 0;
-      currentMonthTotal.totalRequests += item.sum.requests || 0;
-      currentMonthTotal.totalBytes += item.sum.bytes || 0;
-    });
+    // Collect confidence data
+    const requestsConf = totals?.confidence?.count;
+    const bytesConf = totals?.confidence?.sum?.edgeResponseBytes;
+    
+    if (requestsConf) {
+      totalRequestsConfidenceData.estimates.push(requestsConf.estimate || zoneRequests);
+      totalRequestsConfidenceData.lowers.push(requestsConf.lower || zoneRequests);
+      totalRequestsConfidenceData.uppers.push(requestsConf.upper || zoneRequests);
+      totalRequestsConfidenceData.sampleSizes.push(requestsConf.sampleSize || 0);
+    }
+    
+    if (bytesConf) {
+      totalBytesConfidenceData.estimates.push(bytesConf.estimate || zoneBytes);
+      totalBytesConfidenceData.lowers.push(bytesConf.lower || zoneBytes);
+      totalBytesConfidenceData.uppers.push(bytesConf.upper || zoneBytes);
+      totalBytesConfidenceData.sampleSizes.push(bytesConf.sampleSize || 0);
+    }
+    
+    // Add to account totals (already filtered for clean/billable traffic)
+    currentMonthTotal.requests += zoneRequests;
+    currentMonthTotal.bytes += zoneBytes;
     
     // Classify zone as primary or secondary based on bandwidth
     const isPrimary = zoneBytes >= SECONDARY_ZONE_THRESHOLD;
     
     zoneMetrics.push({
       zoneTag: zone.zoneTag,
-      zoneName: zoneNameMap[zone.zoneTag] || zone.zoneTag, // ✅ Add zone name!
+      zoneName: zoneNameMap[zone.zoneTag] || zone.zoneTag,
       requests: zoneRequests,
       bytes: zoneBytes,
       dnsQueries: 0,
@@ -937,145 +999,45 @@ async function fetchAccountMetrics(apiKey, accountId, env) {
     });
   });
   
-  // Query blocked requests using httpRequestsAdaptiveGroups with securityAction filter
-  // Include all security actions: blocks, challenges, and connection closes
-  try {
-    const datetimeStart = currentMonthStart.toISOString();
-    const datetimeEnd = currentMonthEnd.toISOString();
+  // Calculate aggregated confidence for total requests and bytes
+  if (totalRequestsConfidenceData.estimates.length > 0) {
+    const totalEstimate = totalRequestsConfidenceData.estimates.reduce((a, b) => a + b, 0);
+    const totalLower = totalRequestsConfidenceData.lowers.reduce((a, b) => a + b, 0);
+    const totalUpper = totalRequestsConfidenceData.uppers.reduce((a, b) => a + b, 0);
+    const totalSampleSize = totalRequestsConfidenceData.sampleSizes.reduce((a, b) => a + b, 0);
     
-    const blockedQuery = {
-      operationName: 'GetBlockedRequests',
-      variables: {
-        accountTag: accountId,
-        filter: {
-          AND: [
-            {
-              datetime_geq: datetimeStart,
-              datetime_leq: datetimeEnd,
-              requestSource: 'eyeball'
-            },
-            {
-              OR: [
-                { securityAction: 'block' },
-                { securityAction: 'challenge' },
-                { securityAction: 'jschallenge' },
-                { securityAction: 'connection_close' },
-                { securityAction: 'challenge_failed' },
-                { securityAction: 'jschallenge_failed' },
-                { securityAction: 'force_connection_close' },
-                { securityAction: 'managed_challenge' },
-                { securityAction: 'managed_challenge_failed' }
-              ]
-            }
-          ]
-        }
-      },
-      query: `query GetBlockedRequests($accountTag: string, $filter: AccountHttpRequestsAdaptiveGroupsFilter_InputObject) {
-        viewer {
-          accounts(filter: {accountTag: $accountTag}) {
-            total: httpRequestsAdaptiveGroups(filter: $filter, limit: 1) {
-              count
-              sum {
-                bytes
-              }
-            }
-          }
-        }
-      }`
-    };
-
-    const blockedResponse = await fetch('https://api.cloudflare.com/client/v4/graphql', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify(blockedQuery),
+    currentMonthTotal.confidence.requests = calculateConfidencePercentage({
+      estimate: totalEstimate,
+      lower: totalLower,
+      upper: totalUpper,
+      sampleSize: totalSampleSize
     });
-
-    const blockedData = await blockedResponse.json();
-    
-    if (blockedResponse.ok && blockedData.data?.viewer?.accounts?.[0]?.total?.[0]) {
-      const blockedStats = blockedData.data.viewer.accounts[0].total[0];
-      currentMonthTotal.blockedRequests = blockedStats.count || 0;
-      currentMonthTotal.blockedBytes = blockedStats.sum?.bytes || 0;
-    }
-  } catch (blockedError) {
-    console.error('Error fetching blocked requests:', blockedError);
   }
   
-  // Calculate clean traffic (billable = total - blocked)
-  currentMonthTotal.cleanRequests = currentMonthTotal.totalRequests - currentMonthTotal.blockedRequests;
-  currentMonthTotal.bytes = currentMonthTotal.totalBytes - currentMonthTotal.blockedBytes; // Clean/billable bytes
-
-  // Fetch blocked requests and DNS queries for each zone IN PARALLEL
+  if (totalBytesConfidenceData.estimates.length > 0) {
+    const totalEstimate = totalBytesConfidenceData.estimates.reduce((a, b) => a + b, 0);
+    const totalLower = totalBytesConfidenceData.lowers.reduce((a, b) => a + b, 0);
+    const totalUpper = totalBytesConfidenceData.uppers.reduce((a, b) => a + b, 0);
+    const totalSampleSize = totalBytesConfidenceData.sampleSizes.reduce((a, b) => a + b, 0);
+    
+    currentMonthTotal.confidence.bytes = calculateConfidencePercentage({
+      estimate: totalEstimate,
+      lower: totalLower,
+      upper: totalUpper,
+      sampleSize: totalSampleSize
+    });
+  }
+  
+  // Fetch DNS queries for each zone IN PARALLEL
   try {
     const datetimeStart = currentMonthStart.toISOString();
     const datetimeEnd = currentMonthEnd.toISOString();
     
-    // Process all zones in parallel
+    // Process all zones in parallel - fetch DNS queries only
     await Promise.all(zoneMetrics.map(async (zoneMetric) => {
-      // Fetch blocked requests and DNS queries in parallel for this zone
-      const [blockedResult, dnsResult] = await Promise.allSettled([
-        // Blocked requests query
-        (async () => {
-          const blockedZoneQuery = {
-            operationName: 'GetZoneBlockedRequests',
-            variables: {
-              zoneTag: zoneMetric.zoneTag,
-              filter: {
-                AND: [
-                  {
-                    datetime_geq: datetimeStart,
-                    datetime_leq: datetimeEnd,
-                    requestSource: 'eyeball'
-                  },
-                  {
-                    OR: [
-                      { securityAction: 'block' },
-                      { securityAction: 'challenge' },
-                      { securityAction: 'jschallenge' },
-                      { securityAction: 'connection_close' },
-                      { securityAction: 'challenge_failed' },
-                      { securityAction: 'jschallenge_failed' },
-                      { securityAction: 'force_connection_close' },
-                      { securityAction: 'managed_challenge' },
-                      { securityAction: 'managed_challenge_failed' }
-                    ]
-                  }
-                ]
-              }
-            },
-            query: `query GetZoneBlockedRequests($zoneTag: string, $filter: ZoneHttpRequestsAdaptiveGroupsFilter_InputObject) {
-              viewer {
-                zones(filter: {zoneTag: $zoneTag}) {
-                  total: httpRequestsAdaptiveGroups(filter: $filter, limit: 1) {
-                    count
-                  }
-                }
-              }
-            }`
-          };
-
-          const blockedZoneResponse = await fetch('https://api.cloudflare.com/client/v4/graphql', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${apiKey}`,
-            },
-            body: JSON.stringify(blockedZoneQuery),
-          });
-
-          const blockedZoneData = await blockedZoneResponse.json();
-          
-          if (blockedZoneResponse.ok && blockedZoneData.data?.viewer?.zones?.[0]?.total?.[0]?.count) {
-            return blockedZoneData.data.viewer.zones[0].total[0].count;
-          }
-          return 0;
-        })(),
-        
-        // DNS queries
-        (async () => {
+      try {
+        // Fetch DNS queries
+        const dnsResult = await (async () => {
           const dnsQuery = {
             operationName: 'DnsTotals',
             variables: {
@@ -1092,6 +1054,14 @@ async function fetchAccountMetrics(apiKey, accountId, env) {
                 zones(filter: {zoneTag: $zoneTag}) {
                   queryTotals: dnsAnalyticsAdaptiveGroups(limit: 5000, filter: $filter) {
                     count
+                    confidence(level: 0.95) {
+                      count {
+                        estimate
+                        lower
+                        upper
+                        sampleSize
+                      }
+                    }
                   }
                 }
               }
@@ -1109,46 +1079,55 @@ async function fetchAccountMetrics(apiKey, accountId, env) {
 
           const dnsData = await dnsResponse.json();
           
-          if (dnsResponse.ok && dnsData.data?.viewer?.zones?.[0]?.queryTotals?.[0]?.count) {
-            return dnsData.data.viewer.zones[0].queryTotals[0].count;
+          if (dnsResponse.ok && dnsData.data?.viewer?.zones?.[0]?.queryTotals?.[0]) {
+            const queryData = dnsData.data.viewer.zones[0].queryTotals[0];
+            return {
+              count: queryData.count || 0,
+              confidence: queryData.confidence?.count || null
+            };
           }
-          return 0;
-        })()
-      ]);
-      
-      // Handle blocked requests result
-      if (blockedResult.status === 'fulfilled') {
-        zoneMetric.blockedRequests = blockedResult.value;
-      } else {
-        console.error(`Error fetching blocked requests for zone ${zoneMetric.zoneTag}:`, blockedResult.reason);
-        zoneMetric.blockedRequests = 0;
-      }
-      
-      // Calculate clean requests for this zone
-      zoneMetric.cleanRequests = zoneMetric.requests - zoneMetric.blockedRequests;
-      
-      // Handle DNS result
-      if (dnsResult.status === 'fulfilled') {
-        zoneMetric.dnsQueries = dnsResult.value;
-        currentMonthTotal.dnsQueries += dnsResult.value;
-      } else {
-        console.error(`Error fetching DNS for zone ${zoneMetric.zoneTag}:`, dnsResult.reason);
+          return { count: 0, confidence: null };
+        })();
+        
+        // Update zone metrics and collect confidence
+        zoneMetric.dnsQueries = dnsResult.count;
+        currentMonthTotal.dnsQueries += dnsResult.count;
+        
+        // Collect DNS confidence data
+        if (dnsResult.confidence) {
+          totalDnsConfidenceData.estimates.push(dnsResult.confidence.estimate || dnsResult.count);
+          totalDnsConfidenceData.lowers.push(dnsResult.confidence.lower || dnsResult.count);
+          totalDnsConfidenceData.uppers.push(dnsResult.confidence.upper || dnsResult.count);
+          totalDnsConfidenceData.sampleSizes.push(dnsResult.confidence.sampleSize || 0);
+        }
+      } catch (error) {
+        console.error(`Error fetching DNS for zone ${zoneMetric.zoneTag}:`, error);
         zoneMetric.dnsQueries = 0;
       }
     }));
   } catch (error) {
     console.error('Error fetching zone metrics:', error);
   }
+  
+  // Calculate aggregated confidence for DNS queries
+  if (totalDnsConfidenceData.estimates.length > 0) {
+    const totalEstimate = totalDnsConfidenceData.estimates.reduce((a, b) => a + b, 0);
+    const totalLower = totalDnsConfidenceData.lowers.reduce((a, b) => a + b, 0);
+    const totalUpper = totalDnsConfidenceData.uppers.reduce((a, b) => a + b, 0);
+    const totalSampleSize = totalDnsConfidenceData.sampleSizes.reduce((a, b) => a + b, 0);
+    
+    currentMonthTotal.confidence.dnsQueries = calculateConfidencePercentage({
+      estimate: totalEstimate,
+      lower: totalLower,
+      upper: totalUpper,
+      sampleSize: totalSampleSize
+    });
+  }
 
   // Handle previous month data
   let previousMonthStats = { 
-    totalRequests: 0,
-    blockedRequests: 0,
-    cleanRequests: 0,
-    requests: 0,
-    totalBytes: 0,
-    blockedBytes: 0,
-    bytes: 0, // This will be clean/billable bytes
+    requests: 0,  // Clean/billable requests only
+    bytes: 0,     // Clean/billable bytes only
     dnsQueries: 0
   };
   
@@ -1160,24 +1139,34 @@ async function fetchAccountMetrics(apiKey, accountId, env) {
     };
   } else if (now.getDate() >= 2) {
     // Only query if we're at least 2 days into current month (previous month is complete)
-    const previousMonthDateStart = previousMonthStart.toISOString().split('T')[0];
-    const previousMonthDateEnd = previousMonthEnd.toISOString().split('T')[0];
+    const previousMonthDatetimeStart = previousMonthStart.toISOString();
+    const previousMonthDatetimeEnd = previousMonthEnd.toISOString();
     
     const previousMonthQuery = {
       operationName: 'GetPreviousMonthStats',
       variables: {
         zoneIds: zoneIds,
-        dateStart: previousMonthDateStart,
-        dateEnd: previousMonthDateEnd,
+        filter: {
+          AND: [
+            { datetime_geq: previousMonthDatetimeStart },
+            { datetime_leq: previousMonthDatetimeEnd },
+            { requestSource: 'eyeball' },
+            { securitySource_neq: 'l7ddos' },
+            { securityAction_neq: 'block' },
+            { securityAction_neq: 'challenge_failed' },
+            { securityAction_neq: 'jschallenge_failed' },
+            { securityAction_neq: 'managed_challenge_failed' }
+          ]
+        }
       },
-      query: `query GetPreviousMonthStats($zoneIds: [String!]!, $dateStart: String!, $dateEnd: String!) {
+      query: `query GetPreviousMonthStats($zoneIds: [String!]!, $filter: ZoneHttpRequestsAdaptiveGroupsFilter_InputObject) {
         viewer {
           zones(filter: {zoneTag_in: $zoneIds}) {
             zoneTag
-            httpRequests1dGroups(filter: {date_geq: $dateStart, date_leq: $dateEnd}, limit: 10000) {
+            totals: httpRequestsAdaptiveGroups(filter: $filter, limit: 1) {
+              count
               sum {
-                requests
-                bytes
+                edgeResponseBytes
               }
             }
           }
@@ -1202,22 +1191,21 @@ async function fetchAccountMetrics(apiKey, accountId, env) {
     const SECONDARY_ZONE_THRESHOLD = 50 * (1024 ** 3); // 50GB in bytes
     
     prevZones.forEach(zone => {
-      let zoneRequests = 0;
-      let zoneBytes = 0;
+      // Get aggregated totals (single result, no loop needed)
+      const totals = zone.totals?.[0];
+      const zoneRequests = totals?.count || 0;
+      const zoneBytes = totals?.sum?.edgeResponseBytes || 0;
       
-      zone.httpRequests1dGroups.forEach(item => {
-        zoneRequests += item.sum.requests || 0;
-        zoneBytes += item.sum.bytes || 0;
-        previousMonthStats.totalRequests += item.sum.requests || 0;
-        previousMonthStats.totalBytes += item.sum.bytes || 0;
-      });
+      // Add to previous month totals (already filtered for clean/billable traffic)
+      previousMonthStats.requests += zoneRequests;
+      previousMonthStats.bytes += zoneBytes;
       
       // Classify zone as primary or secondary based on bandwidth
       const isPrimary = zoneBytes >= SECONDARY_ZONE_THRESHOLD;
       
       prevZoneMetrics.push({
         zoneTag: zone.zoneTag,
-        zoneName: zoneNameMap[zone.zoneTag] || zone.zoneTag, // ✅ Add zone name!
+        zoneName: zoneNameMap[zone.zoneTag] || zone.zoneTag,
         requests: zoneRequests,
         bytes: zoneBytes,
         dnsQueries: 0,
@@ -1285,78 +1273,6 @@ async function fetchAccountMetrics(apiKey, accountId, env) {
     
     // Store zone metrics in previous month stats for caching
     previousMonthStats.zoneMetrics = prevZoneMetrics;
-
-    // Query blocked requests for previous month
-    // Include all security actions: blocks, challenges, and connection closes
-    try {
-      const prevDatetimeStart = previousMonthStart.toISOString();
-      const prevDatetimeEnd = previousMonthEnd.toISOString();
-      
-      const prevBlockedQuery = {
-        operationName: 'GetPreviousBlockedRequests',
-        variables: {
-          accountTag: accountId,
-          filter: {
-            AND: [
-              {
-                datetime_geq: prevDatetimeStart,
-                datetime_leq: prevDatetimeEnd,
-                requestSource: 'eyeball'
-              },
-              {
-                OR: [
-                  { securityAction: 'block' },
-                  { securityAction: 'challenge' },
-                  { securityAction: 'jschallenge' },
-                  { securityAction: 'connection_close' },
-                  { securityAction: 'challenge_failed' },
-                  { securityAction: 'jschallenge_failed' },
-                  { securityAction: 'force_connection_close' },
-                  { securityAction: 'managed_challenge' },
-                  { securityAction: 'managed_challenge_failed' }
-                ]
-              }
-            ]
-          }
-        },
-        query: `query GetPreviousBlockedRequests($accountTag: string, $filter: AccountHttpRequestsAdaptiveGroupsFilter_InputObject) {
-          viewer {
-            accounts(filter: {accountTag: $accountTag}) {
-              total: httpRequestsAdaptiveGroups(filter: $filter, limit: 1) {
-                count
-                sum {
-                  bytes
-                }
-              }
-            }
-          }
-        }`
-      };
-
-      const prevBlockedResponse = await fetch('https://api.cloudflare.com/client/v4/graphql', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify(prevBlockedQuery),
-      });
-
-      const prevBlockedData = await prevBlockedResponse.json();
-      
-      if (prevBlockedResponse.ok && prevBlockedData.data?.viewer?.accounts?.[0]?.total?.[0]) {
-        const prevBlockedStats = prevBlockedData.data.viewer.accounts[0].total[0];
-        previousMonthStats.blockedRequests = prevBlockedStats.count || 0;
-        previousMonthStats.blockedBytes = prevBlockedStats.sum?.bytes || 0;
-      }
-    } catch (prevBlockedError) {
-      console.error('Error fetching previous month blocked requests:', prevBlockedError);
-    }
-
-    // Calculate clean traffic for previous month (billable = total - blocked)
-    previousMonthStats.cleanRequests = previousMonthStats.totalRequests - previousMonthStats.blockedRequests;
-    previousMonthStats.bytes = previousMonthStats.totalBytes - previousMonthStats.blockedBytes; // Clean/billable bytes
-    previousMonthStats.requests = previousMonthStats.cleanRequests; // For backward compatibility
 
     // Cache the previous month data since it's now complete
     await env.CONFIG_KV.put(
@@ -1457,7 +1373,7 @@ async function fetchAccountMetrics(apiKey, accountId, env) {
     {
       month: currentMonthKey,
       timestamp: currentMonthStart.toISOString(),
-      requests: currentMonthTotal.cleanRequests, // Use clean requests for historical trend
+      requests: currentMonthTotal.requests, // Clean/billable requests
       bytes: currentMonthTotal.bytes,
       dnsQueries: currentMonthTotal.dnsQueries,
     }
@@ -1485,12 +1401,10 @@ async function fetchAccountMetrics(apiKey, accountId, env) {
     accountId,
     accountName,
     current: {
-      totalRequests: currentMonthTotal.totalRequests,
-      blockedRequests: currentMonthTotal.blockedRequests,
-      cleanRequests: currentMonthTotal.cleanRequests,
-      bytes: currentMonthTotal.bytes,
+      requests: currentMonthTotal.requests,  // Clean/billable requests only
+      bytes: currentMonthTotal.bytes,        // Clean/billable bytes only
       dnsQueries: currentMonthTotal.dnsQueries,
-      requests: currentMonthTotal.cleanRequests,
+      confidence: currentMonthTotal.confidence,
     },
     previous: previousMonthStats,
     timeSeries: timeSeriesData,
@@ -1511,6 +1425,7 @@ async function fetchAccountMetrics(apiKey, accountId, env) {
     await env.CONFIG_KV.put(
       currentMonthCacheKey,
       JSON.stringify({
+        version: 2, // Must match CACHE_VERSION above
         cachedAt: Date.now(),
         data: result
       }),
@@ -1530,17 +1445,16 @@ async function fetchAccountMetrics(apiKey, accountId, env) {
 function aggregateAccountMetrics(accountMetrics) {
   const aggregated = {
     current: {
-      totalRequests: 0,
-      blockedRequests: 0,
-      cleanRequests: 0,
-      bytes: 0,
+      requests: 0,  // Clean/billable requests only
+      bytes: 0,     // Clean/billable bytes only
       dnsQueries: 0,
-      requests: 0,
+      confidence: {
+        requests: null,
+        bytes: null,
+        dnsQueries: null
+      }
     },
     previous: {
-      totalRequests: 0,
-      blockedRequests: 0,
-      cleanRequests: 0,
       requests: 0,
       bytes: 0,
       dnsQueries: 0,
@@ -1560,21 +1474,106 @@ function aggregateAccountMetrics(accountMetrics) {
   };
 
   // Aggregate current month
+  const confidenceAggregator = {
+    requests: { estimates: [], lowers: [], uppers: [], sampleSizes: [] },
+    bytes: { estimates: [], lowers: [], uppers: [], sampleSizes: [] },
+    dnsQueries: { estimates: [], lowers: [], uppers: [], sampleSizes: [] }
+  };
+  
   accountMetrics.forEach(accountData => {
-    aggregated.current.totalRequests += accountData.current.totalRequests || 0;
-    aggregated.current.blockedRequests += accountData.current.blockedRequests || 0;
-    aggregated.current.cleanRequests += accountData.current.cleanRequests || 0;
+    aggregated.current.requests += accountData.current.requests || 0;
     aggregated.current.bytes += accountData.current.bytes || 0;
     aggregated.current.dnsQueries += accountData.current.dnsQueries || 0;
-    aggregated.current.requests += accountData.current.requests || 0;
+    
+    // Collect confidence data from each account
+    if (accountData.current.confidence) {
+      if (accountData.current.confidence.requests) {
+        const conf = accountData.current.confidence.requests;
+        confidenceAggregator.requests.estimates.push(conf.estimate);
+        confidenceAggregator.requests.lowers.push(conf.lower);
+        confidenceAggregator.requests.uppers.push(conf.upper);
+        confidenceAggregator.requests.sampleSizes.push(conf.sampleSize);
+      }
+      if (accountData.current.confidence.bytes) {
+        const conf = accountData.current.confidence.bytes;
+        confidenceAggregator.bytes.estimates.push(conf.estimate);
+        confidenceAggregator.bytes.lowers.push(conf.lower);
+        confidenceAggregator.bytes.uppers.push(conf.upper);
+        confidenceAggregator.bytes.sampleSizes.push(conf.sampleSize);
+      }
+      if (accountData.current.confidence.dnsQueries) {
+        const conf = accountData.current.confidence.dnsQueries;
+        confidenceAggregator.dnsQueries.estimates.push(conf.estimate);
+        confidenceAggregator.dnsQueries.lowers.push(conf.lower);
+        confidenceAggregator.dnsQueries.uppers.push(conf.upper);
+        confidenceAggregator.dnsQueries.sampleSizes.push(conf.sampleSize);
+      }
+    }
   });
+  
+  // Calculate aggregated confidence percentages
+  const calculateConfidencePercentage = (confidence) => {
+    if (!confidence || !confidence.estimate) return null;
+    const estimate = confidence.estimate;
+    const lower = confidence.lower || estimate;
+    const upper = confidence.upper || estimate;
+    const intervalWidth = upper - lower;
+    const relativeWidth = intervalWidth / (2 * estimate);
+    const confidencePercent = Math.max(0, Math.min(100, 100 * (1 - relativeWidth)));
+    return {
+      percent: Math.round(confidencePercent * 10) / 10,
+      sampleSize: confidence.sampleSize,
+      estimate: confidence.estimate,
+      lower: confidence.lower,
+      upper: confidence.upper
+    };
+  };
+  
+  // Aggregate confidence for requests
+  if (confidenceAggregator.requests.estimates.length > 0) {
+    const totalEstimate = confidenceAggregator.requests.estimates.reduce((a, b) => a + b, 0);
+    const totalLower = confidenceAggregator.requests.lowers.reduce((a, b) => a + b, 0);
+    const totalUpper = confidenceAggregator.requests.uppers.reduce((a, b) => a + b, 0);
+    const totalSampleSize = confidenceAggregator.requests.sampleSizes.reduce((a, b) => a + b, 0);
+    aggregated.current.confidence.requests = calculateConfidencePercentage({
+      estimate: totalEstimate,
+      lower: totalLower,
+      upper: totalUpper,
+      sampleSize: totalSampleSize
+    });
+  }
+  
+  // Aggregate confidence for bytes
+  if (confidenceAggregator.bytes.estimates.length > 0) {
+    const totalEstimate = confidenceAggregator.bytes.estimates.reduce((a, b) => a + b, 0);
+    const totalLower = confidenceAggregator.bytes.lowers.reduce((a, b) => a + b, 0);
+    const totalUpper = confidenceAggregator.bytes.uppers.reduce((a, b) => a + b, 0);
+    const totalSampleSize = confidenceAggregator.bytes.sampleSizes.reduce((a, b) => a + b, 0);
+    aggregated.current.confidence.bytes = calculateConfidencePercentage({
+      estimate: totalEstimate,
+      lower: totalLower,
+      upper: totalUpper,
+      sampleSize: totalSampleSize
+    });
+  }
+  
+  // Aggregate confidence for DNS queries
+  if (confidenceAggregator.dnsQueries.estimates.length > 0) {
+    const totalEstimate = confidenceAggregator.dnsQueries.estimates.reduce((a, b) => a + b, 0);
+    const totalLower = confidenceAggregator.dnsQueries.lowers.reduce((a, b) => a + b, 0);
+    const totalUpper = confidenceAggregator.dnsQueries.uppers.reduce((a, b) => a + b, 0);
+    const totalSampleSize = confidenceAggregator.dnsQueries.sampleSizes.reduce((a, b) => a + b, 0);
+    aggregated.current.confidence.dnsQueries = calculateConfidencePercentage({
+      estimate: totalEstimate,
+      lower: totalLower,
+      upper: totalUpper,
+      sampleSize: totalSampleSize
+    });
+  }
 
   // Aggregate previous month
   accountMetrics.forEach(accountData => {
-    aggregated.previous.totalRequests += accountData.previous.totalRequests || 0;
-    aggregated.previous.blockedRequests += accountData.previous.blockedRequests || 0;
-    aggregated.previous.cleanRequests += accountData.previous.cleanRequests || 0;
-    aggregated.previous.requests += accountData.previous.requests || accountData.previous.cleanRequests || 0;
+    aggregated.previous.requests += accountData.previous.requests || 0;
     aggregated.previous.bytes += accountData.previous.bytes || 0;
     aggregated.previous.dnsQueries += accountData.previous.dnsQueries || 0;
   });
@@ -1767,7 +1766,7 @@ async function checkThresholds(request, env, corsHeaders) {
             },
             {
               type: 'mrkdwn',
-              text: `*Bot Management (Good Requests):*\n${(metrics.botManagement || 0).toLocaleString()}`
+              text: `*Bot Management (Likely Human):*\n${(metrics.botManagement || 0).toLocaleString()}`
             }
           ]
         },
@@ -1889,7 +1888,7 @@ async function checkThresholds(request, env, corsHeaders) {
         return requests.toLocaleString();
       };
       alerts.push({
-        metric: 'Bot Management (Good Requests)',
+        metric: 'Bot Management (Likely Human)',
         metricKey: 'botManagement',
         current: formatRequests(metrics.botManagement),
         threshold: formatRequests(thresholds.botManagement),
@@ -2158,7 +2157,7 @@ async function fetchEnterpriseZones(apiKey, accountId) {
 
 /**
  * Fetch Bot Management metrics for specific zones
- * Returns good requests (likely human traffic with bot score > 30)
+ * Returns Likely Human requests (likely human traffic with bot score > 30)
  */
 async function fetchBotManagementMetrics(apiKey, zoneId, dateStart, dateEnd) {
   const query = {
@@ -2206,6 +2205,17 @@ async function fetchBotManagementMetrics(apiKey, zoneId, dateStart, dateEnd) {
     query: `query GetBotTimeseries($zoneTag: string, $automatedFilter: ZoneHttpRequestsAdaptiveGroupsFilter_InputObject, $likelyAutomatedFilter: ZoneHttpRequestsAdaptiveGroupsFilter_InputObject, $likelyHumanFilter: ZoneHttpRequestsAdaptiveGroupsFilter_InputObject, $verifiedBotFilter: ZoneHttpRequestsAdaptiveGroupsFilter_InputObject) {
       viewer {
         scope: zones(filter: {zoneTag: $zoneTag}) {
+          likely_human_total: httpRequestsAdaptiveGroups(filter: {AND: [{botManagementDecision_neq: "verified_bot"}, $likelyHumanFilter]}, limit: 1) {
+            count
+            confidence(level: 0.95) {
+              count {
+                estimate
+                lower
+                upper
+                sampleSize
+              }
+            }
+          }
           automated: httpRequestsAdaptiveGroups(filter: {AND: [{botManagementDecision_neq: "verified_bot"}, $automatedFilter]}, limit: 10000) {
             dimensions {
               ts: date
@@ -2239,6 +2249,14 @@ async function fetchBotManagementMetrics(apiKey, zoneId, dateStart, dateEnd) {
             avg {
               sampleInterval
               __typename
+            }
+            confidence(level: 0.95) {
+              count {
+                estimate
+                lower
+                upper
+                sampleSize
+              }
             }
             __typename
           }
@@ -2277,21 +2295,34 @@ async function fetchBotManagementMetrics(apiKey, zoneId, dateStart, dateEnd) {
     return null;
   }
 
-  // Extract good requests (likely_human)
+  // Extract Likely Human requests (likely_human)
   const scope = data.data?.viewer?.scope?.[0];
   if (!scope) {
     return null;
   }
 
-  // Sum up all likely_human requests (bot score > 30 = good requests)
+  // Sum up all likely_human requests (bot score > 30 = Likely Human requests)
   const likelyHumanData = scope.likely_human || [];
-  const goodRequests = likelyHumanData.reduce((total, entry) => {
+  const likelyHuman = likelyHumanData.reduce((total, entry) => {
     return total + (entry.count || 0);
   }, 0);
+  
+  // Get confidence from aggregated total (not from time series)
+  let confidence = null;
+  const totalData = scope.likely_human_total?.[0];
+  if (totalData?.confidence?.count) {
+    confidence = {
+      estimate: totalData.confidence.count.estimate || likelyHuman,
+      lower: totalData.confidence.count.lower || likelyHuman,
+      upper: totalData.confidence.count.upper || likelyHuman,
+      sampleSize: totalData.confidence.count.sampleSize || 0
+    };
+  }
 
   return {
     zoneId,
-    goodRequests,
+    likelyHuman,
+    confidence,
     automated: scope.automated?.reduce((total, entry) => total + (entry.count || 0), 0) || 0,
     likelyAutomated: scope.likely_automated?.reduce((total, entry) => total + (entry.count || 0), 0) || 0,
     verifiedBot: scope.verified_bot?.reduce((total, entry) => total + (entry.count || 0), 0) || 0,
@@ -2358,23 +2389,49 @@ async function fetchBotManagementForAccount(apiKey, accountId, botManagementConf
     .map(result => result.value);
 
   // Aggregate results
-  const currentTotal = currentMonthData.reduce((sum, zone) => sum + zone.goodRequests, 0);
-  const previousTotal = previousMonthData.reduce((sum, zone) => sum + zone.goodRequests, 0);
+  const currentTotal = currentMonthData.reduce((sum, zone) => sum + zone.likelyHuman, 0);
+  const previousTotal = previousMonthData.reduce((sum, zone) => sum + zone.likelyHuman, 0);
+  
+  // Aggregate confidence from all zones
+  const confidenceData = {
+    estimates: [],
+    lowers: [],
+    uppers: [],
+    sampleSizes: []
+  };
+  
+  currentMonthData.forEach(zone => {
+    if (zone.confidence) {
+      confidenceData.estimates.push(zone.confidence.estimate);
+      confidenceData.lowers.push(zone.confidence.lower);
+      confidenceData.uppers.push(zone.confidence.upper);
+      confidenceData.sampleSizes.push(zone.confidence.sampleSize);
+    }
+  });
+  
+  let aggregatedConfidence = null;
+  if (confidenceData.estimates.length > 0) {
+    aggregatedConfidence = {
+      estimate: confidenceData.estimates.reduce((a, b) => a + b, 0),
+      lower: confidenceData.lowers.reduce((a, b) => a + b, 0),
+      upper: confidenceData.uppers.reduce((a, b) => a + b, 0),
+      sampleSize: confidenceData.sampleSizes.reduce((a, b) => a + b, 0)
+    };
+  }
 
   // Build zone breakdown
   const zoneBreakdown = currentMonthData.map(zone => ({
     zoneId: zone.zoneId,
     zoneName: zoneMap[zone.zoneId] || zone.zoneId,
-    goodRequests: zone.goodRequests,
+    likelyHuman: zone.likelyHuman,
     automated: zone.automated,
     likelyAutomated: zone.likelyAutomated,
     verifiedBot: zone.verifiedBot,
   }));
-
   const previousZoneBreakdown = previousMonthData.map(zone => ({
     zoneId: zone.zoneId,
     zoneName: zoneMap[zone.zoneId] || zone.zoneId,
-    goodRequests: zone.goodRequests,
+    likelyHuman: zone.likelyHuman,
     automated: zone.automated,
     likelyAutomated: zone.likelyAutomated,
     verifiedBot: zone.verifiedBot,
@@ -2387,7 +2444,7 @@ async function fetchBotManagementForAccount(apiKey, accountId, botManagementConf
       await env.CONFIG_KV.put(
         `monthly-bot-stats:${accountId}:${previousMonthKey}`,
         JSON.stringify({
-          goodRequests: previousTotal,
+          likelyHuman: previousTotal,
           zones: previousZoneBreakdown,
         }),
         { expirationTtl: 31536000 } // 1 year
@@ -2408,19 +2465,38 @@ async function fetchBotManagementForAccount(apiKey, accountId, botManagementConf
     {
       month: currentMonthKey,
       timestamp: currentMonthStart.toISOString(),
-      goodRequests: currentTotal,
+      likelyHuman: currentTotal,
     }
   ];
+
+  // Calculate confidence percentage
+  const calculateConfidencePercentage = (confidence) => {
+    if (!confidence || !confidence.estimate) return null;
+    const estimate = confidence.estimate;
+    const lower = confidence.lower || estimate;
+    const upper = confidence.upper || estimate;
+    const intervalWidth = upper - lower;
+    const relativeWidth = intervalWidth / (2 * estimate);
+    const confidencePercent = Math.max(0, Math.min(100, 100 * (1 - relativeWidth)));
+    return {
+      percent: Math.round(confidencePercent * 10) / 10,
+      sampleSize: confidence.sampleSize,
+      estimate: confidence.estimate,
+      lower: confidence.lower,
+      upper: confidence.upper
+    };
+  };
 
   return {
     enabled: true,
     threshold: botManagementConfig.threshold || null,
     current: {
-      goodRequests: currentTotal,
+      likelyHuman: currentTotal,
       zones: zoneBreakdown,
+      confidence: aggregatedConfidence ? calculateConfidencePercentage(aggregatedConfidence) : null,
     },
     previous: {
-      goodRequests: previousTotal,
+      likelyHuman: previousTotal,
       zones: previousZoneBreakdown,
     },
     timeSeries: timeSeriesData,
@@ -2459,7 +2535,7 @@ async function getHistoricalBotManagementData(env, accountId) {
       historicalData.push({
         month,
         timestamp,
-        goodRequests: data.goodRequests || 0,
+        likelyHuman: data.likelyHuman || 0,
       });
     }
   }
@@ -2507,6 +2583,12 @@ async function calculateZoneBasedAddonForAccount(accountData, addonConfig, env, 
       requests: zone.requests || 0,
     }));
   
+  // If no configured zones belong to this account, return null
+  if (currentZones.length === 0) {
+    console.log(`${addonType}: No configured zones found in account ${accountData.accountId}, skipping`);
+    return null;
+  }
+  
   // Filter previous month zones
   const previousZones = (accountData.previousMonthZoneBreakdown?.zones || [])
     .filter(zone => configuredZones.has(zone.zoneTag))
@@ -2519,6 +2601,14 @@ async function calculateZoneBasedAddonForAccount(accountData, addonConfig, env, 
   // Sum up requests for configured zones
   const currentTotal = currentZones.reduce((sum, zone) => sum + (zone.requests || 0), 0);
   const previousTotal = previousZones.reduce((sum, zone) => sum + (zone.requests || 0), 0);
+  
+  // Zone-based SKUs inherit confidence from HTTP request data
+  // Since these are just HTTP requests filtered by zone, use the account's overall HTTP request confidence
+  // This is appropriate because:
+  // 1. These are HTTP requests (same data source as core HTTP metrics)
+  // 2. Sampling applies equally to all zones
+  // 3. The confidence represents the accuracy of the request counts
+  const confidence = accountData.current?.confidence?.requests || null;
   
   // Load historical data from KV
   const historicalData = await getHistoricalAddonData(env, accountData.accountId, addonType);
@@ -2570,6 +2660,7 @@ async function calculateZoneBasedAddonForAccount(accountData, addonConfig, env, 
     current: {
       requests: currentTotal,
       zones: currentZones,
+      confidence: confidence,
     },
     previous: {
       requests: previousTotal,
@@ -2984,12 +3075,12 @@ async function preWarmCache(env) {
             accountEntry.data.timeSeries.forEach(entry => {
               const existing = timeSeriesMap.get(entry.month);
               if (existing) {
-                existing.goodRequests += entry.goodRequests || 0;
+                existing.likelyHuman += entry.likelyHuman || 0;
               } else {
                 timeSeriesMap.set(entry.month, {
                   month: entry.month,
                   timestamp: entry.timestamp,
-                  goodRequests: entry.goodRequests || 0,
+                  likelyHuman: entry.likelyHuman || 0,
                 });
               }
             });
@@ -2999,15 +3090,19 @@ async function preWarmCache(env) {
         const mergedTimeSeries = Array.from(timeSeriesMap.values())
           .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
 
+        // Aggregate confidence from all accounts
+        const botManagementConfidence = botMgmtData.find(entry => entry.data.current?.confidence)?.data.current.confidence || null;
+
         botManagementData = {
           enabled: true,
           threshold: botManagementConfig.threshold,
           current: {
-            goodRequests: botMgmtData.reduce((sum, entry) => sum + entry.data.current.goodRequests, 0),
+            likelyHuman: botMgmtData.reduce((sum, entry) => sum + entry.data.current.likelyHuman, 0),
             zones: botMgmtData.flatMap(entry => entry.data.current.zones),
+            confidence: botManagementConfidence,
           },
           previous: {
-            goodRequests: botMgmtData.reduce((sum, entry) => sum + entry.data.previous.goodRequests, 0),
+            likelyHuman: botMgmtData.reduce((sum, entry) => sum + entry.data.previous.likelyHuman, 0),
             zones: botMgmtData.flatMap(entry => entry.data.previous.zones),
           },
           timeSeries: mergedTimeSeries,
@@ -3063,12 +3158,16 @@ async function preWarmCache(env) {
         const mergedTimeSeries = Array.from(timeSeriesMap.values())
           .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
 
+        // Aggregate confidence from all accounts
+        const apiShieldConfidence = apiShieldAccounts.find(entry => entry.data.current?.confidence)?.data.current.confidence || null;
+
         apiShieldData = {
           enabled: true,
           threshold: apiShieldConfig.threshold,
           current: {
             requests: apiShieldAccounts.reduce((sum, entry) => sum + entry.data.current.requests, 0),
             zones: apiShieldAccounts.flatMap(entry => entry.data.current.zones),
+            confidence: apiShieldConfidence,
           },
           previous: {
             requests: apiShieldAccounts.reduce((sum, entry) => sum + entry.data.previous.requests, 0),
@@ -3126,12 +3225,16 @@ async function preWarmCache(env) {
         const mergedTimeSeries = Array.from(timeSeriesMap.values())
           .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
 
+        // Aggregate confidence from all accounts
+        const pageShieldConfidence = pageShieldAccounts.find(entry => entry.data.current?.confidence)?.data.current.confidence || null;
+
         pageShieldData = {
           enabled: true,
           threshold: pageShieldConfig.threshold,
           current: {
             requests: pageShieldAccounts.reduce((sum, entry) => sum + entry.data.current.requests, 0),
             zones: pageShieldAccounts.flatMap(entry => entry.data.current.zones),
+            confidence: pageShieldConfidence,
           },
           previous: {
             requests: pageShieldAccounts.reduce((sum, entry) => sum + entry.data.previous.requests, 0),
@@ -3189,12 +3292,16 @@ async function preWarmCache(env) {
         const mergedTimeSeries = Array.from(timeSeriesMap.values())
           .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
 
+        // Aggregate confidence from all accounts
+        const rateLimitingConfidence = rateLimitingAccounts.find(entry => entry.data.current?.confidence)?.data.current.confidence || null;
+
         advancedRateLimitingData = {
           enabled: true,
           threshold: rateLimitingConfig.threshold,
           current: {
             requests: rateLimitingAccounts.reduce((sum, entry) => sum + entry.data.current.requests, 0),
             zones: rateLimitingAccounts.flatMap(entry => entry.data.current.zones),
+            confidence: rateLimitingConfidence,
           },
           previous: {
             requests: rateLimitingAccounts.reduce((sum, entry) => sum + entry.data.previous.requests, 0),
@@ -3310,7 +3417,7 @@ async function runScheduledThresholdCheck(env) {
     
     const totalZones = allZones.length;
 
-    console.log(`Scheduled check: Current metrics - Zones: ${totalZones}, Requests: ${aggregated.current.cleanRequests}, Bandwidth: ${aggregated.current.bytes}`);
+    console.log(`Scheduled check: Current metrics - Zones: ${totalZones}, Requests: ${aggregated.current.requests}, Bandwidth: ${aggregated.current.bytes}`);
 
     // Check thresholds
     const alerts = [];
@@ -3330,12 +3437,12 @@ async function runScheduledThresholdCheck(env) {
       });
     }
 
-    if (thresholds.requests && aggregated.current.cleanRequests > thresholds.requests) {
+    if (thresholds.requests && aggregated.current.requests > thresholds.requests) {
       alerts.push({
-        metric: 'Clean HTTP Requests',
-        current: aggregated.current.cleanRequests,
+        metric: 'HTTP Requests',
+        current: aggregated.current.requests,
         threshold: thresholds.requests,
-        percentage: ((aggregated.current.cleanRequests / thresholds.requests) * 100).toFixed(1),
+        percentage: ((aggregated.current.requests / thresholds.requests) * 100).toFixed(1),
       });
     }
 

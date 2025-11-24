@@ -73,16 +73,17 @@ export function formatRequests(requests, decimals = 2) {
 
 /**
  * Format bandwidth (shows GB for < 1TB, TB for >= 1TB)
+ * Uses decimal units (1 TB = 1000^4 bytes) as is standard for bandwidth/storage
  */
 export function formatBandwidthTB(bytes, decimals = 2) {
   if (bytes === 0) return '0 GB';
   
-  const tb = bytes / (1024 ** 4);
+  const tb = bytes / (1000 ** 4);
   
   if (tb >= 1) {
     return tb.toFixed(decimals) + ' TB';
   } else {
-    const gb = bytes / (1024 ** 3);
+    const gb = bytes / (1000 ** 3);
     return gb.toFixed(decimals) + ' GB';
   }
 }

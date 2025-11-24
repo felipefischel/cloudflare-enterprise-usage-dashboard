@@ -28,20 +28,41 @@ function ZonesList({ zones, zoneMetrics, usePreviousClassification = false, prev
 
   const formatBandwidth = (bytes) => {
     if (!bytes) return '0 GB';
-    const gb = bytes / (1024 ** 3);
-    if (gb >= 1024) {
-      return `${(gb / 1024).toFixed(2)} TB`;
+    
+    // Use decimal units (1000-based) for bandwidth
+    const tb = bytes / (1000 ** 4);
+    const gb = bytes / (1000 ** 3);
+    
+    // Helper to round and remove unnecessary trailing zeros
+    const cleanNumber = (num) => {
+      const rounded = Math.round(num * 100) / 100; // Round to 2 decimals
+      return parseFloat(rounded.toFixed(2)).toString();
+    };
+    
+    if (tb >= 1) {
+      return `${cleanNumber(tb)} TB`;
     }
-    return `${gb.toFixed(2)} GB`;
+    // Show 0 GB if value rounds to 0
+    if (gb < 0.01) {
+      return '0 GB';
+    }
+    return `${cleanNumber(gb)} GB`;
   };
 
   const formatRequests = (requests) => {
     if (!requests) return '0';
+    
+    // Helper to round and remove unnecessary trailing zeros
+    const cleanNumber = (num) => {
+      const rounded = Math.round(num * 100) / 100; // Round to 2 decimals
+      return parseFloat(rounded.toFixed(2)).toString();
+    };
+    
     if (requests >= 1e6) {
-      return `${(requests / 1e6).toFixed(2)}M`;
+      return `${cleanNumber(requests / 1e6)}M`;
     }
     if (requests >= 1e3) {
-      return `${(requests / 1e3).toFixed(2)}K`;
+      return `${cleanNumber(requests / 1e3)}K`;
     }
     return requests.toString();
   };
@@ -90,7 +111,7 @@ function ZonesList({ zones, zoneMetrics, usePreviousClassification = false, prev
                   {formatBandwidth(zone.bytes)}
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-900 font-medium">
-                  {formatRequests(zone.cleanRequests || zone.requests || 0)}
+                  {formatRequests(zone.requests || 0)}
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-900 font-medium">
                   {formatRequests(zone.dnsQueries || 0)}

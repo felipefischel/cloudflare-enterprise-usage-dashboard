@@ -64,10 +64,8 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
 
     try {
       // Progressive Loading: Phase 1, 2, 3
-      console.log('🚀 Starting progressive data load...');
       
       // Phase 1: Fast - Get zone count + check cache
-      console.log('📊 Phase 1: Fetching zone count...');
       const phase1Response = await fetch('/api/metrics/progressive', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -83,15 +81,9 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
       }
 
       const phase1Data = await phase1Response.json();
-      console.log(`✅ Phase 1 complete (${Math.round((Date.now() - startTime) / 1000)}s)`);
       
       // Check if we got cached data (instant!)
       if (phase1Data.phase === 'cached') {
-        console.log('⚡ CACHE HIT! Using pre-warmed data');
-        console.log('Bot Management data:', phase1Data.botManagement);
-        console.log('API Shield data:', phase1Data.apiShield);
-        console.log('Page Shield data:', phase1Data.pageShield);
-        console.log('Advanced Rate Limiting data:', phase1Data.advancedRateLimiting);
         setCacheAge(Math.floor(phase1Data.cacheAge / 1000)); // Convert to seconds
         setMetrics(phase1Data);
         setLoadingPhase('cached');
@@ -99,11 +91,9 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
         // Use cached zones if available, otherwise fetch
         let zonesData;
         if (phase1Data.zones) {
-          console.log('⚡ Using cached zones list');
           zonesData = phase1Data.zones;
           setZones(zonesData);
         } else {
-          console.log('⚠️ Zones not in cache, fetching separately');
           const zonesResponse = await fetch('/api/zones', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -125,7 +115,6 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
       }
 
       // Cache miss - continue with progressive loading
-      console.log('💾 Cache miss - loading progressively');
       
       // Update UI with Phase 1 data (zone count)
       setMetrics(phase1Data);
@@ -139,7 +128,6 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
       });
       
       // Phase 2: Current month metrics + zone breakdown
-      console.log('📊 Phase 2: Fetching current month metrics...');
       const phase2Response = await fetch('/api/metrics/progressive', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -155,7 +143,6 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
       }
 
       const phase2Data = await phase2Response.json();
-      console.log(`✅ Phase 2 complete (${Math.round((Date.now() - startTime) / 1000)}s)`);
       
       // Update UI with Phase 2 data
       setMetrics(phase2Data);
@@ -167,7 +154,6 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
       setZones(zonesData);
       
       // Phase 3: Historical data (time series)
-      console.log('📊 Phase 3: Fetching historical data...');
       const phase3Response = await fetch('/api/metrics/progressive', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -183,11 +169,6 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
       }
 
       const phase3Data = await phase3Response.json();
-      console.log(`✅ Phase 3 complete - Total time: ${Math.round((Date.now() - startTime) / 1000)}s`);
-      console.log('Bot Management data in Phase 3:', phase3Data.botManagement);
-      console.log('API Shield data in Phase 3:', phase3Data.apiShield);
-      console.log('Page Shield data in Phase 3:', phase3Data.pageShield);
-      console.log('Advanced Rate Limiting data in Phase 3:', phase3Data.advancedRateLimiting);
       
       // Update UI with final complete data
       setMetrics(phase3Data);
@@ -218,9 +199,9 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
         body: JSON.stringify({
           metrics: {
             zones: zonesData?.enterprise || 0,
-            requests: metricsData?.current?.cleanRequests || 0,
+            requests: metricsData?.current?.requests || 0,
             bandwidth: metricsData?.current?.bytes || 0,
-            botManagement: metricsData?.botManagement?.current?.goodRequests || 0,
+            botManagement: metricsData?.botManagement?.current?.likelyHuman || 0,
             apiShield: metricsData?.apiShield?.current?.requests || 0,
             pageShield: metricsData?.pageShield?.current?.requests || 0,
             advancedRateLimiting: metricsData?.advancedRateLimiting?.current?.requests || 0,
@@ -295,7 +276,6 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
       const result = await response.json();
       
       if (result.success) {
-        console.log('✅ Cache pre-warmed successfully');
         // Refetch data to show updated metrics (including removed SKUs)
         await fetchData();
       } else {
@@ -373,15 +353,8 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
           previous: accountBotData.previous,
           timeSeries: accountBotData.timeSeries,
         };
-      } else {
-        filteredBotManagement = {
-          enabled: true,
-          threshold: config?.applicationServices?.botManagement?.threshold || metrics.botManagement.threshold,
-          current: { goodRequests: 0, zones: [] },
-          previous: { goodRequests: 0, zones: [] },
-          timeSeries: [],
-        };
       }
+      // If no data for this account, set to null (product not contracted)
     }
     
     // Filter API Shield data for selected account
@@ -399,15 +372,8 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
           previous: accountApiShieldData.previous,
           timeSeries: accountApiShieldData.timeSeries,
         };
-      } else {
-        filteredApiShield = {
-          enabled: true,
-          threshold: config?.applicationServices?.apiShield?.threshold || metrics.apiShield.threshold,
-          current: { requests: 0, zones: [] },
-          previous: { requests: 0, zones: [] },
-          timeSeries: [],
-        };
       }
+      // If no data for this account, set to null (product not contracted)
     }
     
     // Filter Page Shield data for selected account
@@ -425,15 +391,8 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
           previous: accountPageShieldData.previous,
           timeSeries: accountPageShieldData.timeSeries,
         };
-      } else {
-        filteredPageShield = {
-          enabled: true,
-          threshold: config?.applicationServices?.pageShield?.threshold || metrics.pageShield.threshold,
-          current: { requests: 0, zones: [] },
-          previous: { requests: 0, zones: [] },
-          timeSeries: [],
-        };
       }
+      // If no data for this account, set to null (product not contracted)
     }
     
     // Filter Advanced Rate Limiting data for selected account
@@ -451,15 +410,8 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
           previous: accountRateLimitingData.previous,
           timeSeries: accountRateLimitingData.timeSeries,
         };
-      } else {
-        filteredAdvancedRateLimiting = {
-          enabled: true,
-          threshold: config?.applicationServices?.advancedRateLimiting?.threshold || metrics.advancedRateLimiting.threshold,
-          current: { requests: 0, zones: [] },
-          previous: { requests: 0, zones: [] },
-          timeSeries: [],
-        };
       }
+      // If no data for this account, set to null (product not contracted)
     }
     
     return {
@@ -663,7 +615,7 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
         </div>
 
         {/* Service Content */}
-        <div className="p-6">
+        <div className="p-6 bg-gray-50">
           {activeServiceTab === SERVICE_CATEGORIES.APPLICATION_SERVICES && renderApplicationServices()}
           {activeServiceTab === SERVICE_CATEGORIES.ZERO_TRUST && renderPlaceholderService('Zero Trust Services')}
           {activeServiceTab === SERVICE_CATEGORIES.NETWORK_SERVICES && renderPlaceholderService('Network Services')}
@@ -678,7 +630,7 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
     return (
       <>
       {/* Usage Metrics Section */}
-      <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-lg">
+      <div className="bg-white border border-gray-200 rounded-xl p-6 mb-10">
         <div className="bg-gradient-to-r from-slate-700 to-slate-600 rounded-lg px-6 py-4 mb-6">
           <div className="flex items-center justify-between">
             <h3 className="text-2xl font-semibold text-white tracking-tight">Usage Metrics</h3>
@@ -732,25 +684,18 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
               <MetricCard
                 title="HTTP Requests"
                 value={usageViewMode === 'current' 
-                  ? displayMetrics?.current.cleanRequests || 0 
-                  : displayMetrics?.previous.cleanRequests || displayMetrics?.previous.requests || 0}
+                  ? displayMetrics?.current.requests || 0 
+                  : displayMetrics?.previous.requests || 0}
                 formatted={formatRequests(usageViewMode === 'current' 
-                  ? displayMetrics?.current.cleanRequests || 0 
-                  : displayMetrics?.previous.cleanRequests || displayMetrics?.previous.requests || 0)}
+                  ? displayMetrics?.current.requests || 0 
+                  : displayMetrics?.previous.requests || 0)}
                 threshold={config?.applicationServices?.core?.thresholdRequests || config.thresholdRequests}
                 percentage={calculatePercentage(usageViewMode === 'current' 
-                  ? displayMetrics?.current.cleanRequests || 0 
-                  : displayMetrics?.previous.cleanRequests || displayMetrics?.previous.requests || 0, config?.applicationServices?.core?.thresholdRequests || config.thresholdRequests)}
+                  ? displayMetrics?.current.requests || 0 
+                  : displayMetrics?.previous.requests || 0, config?.applicationServices?.core?.thresholdRequests || config.thresholdRequests)}
                 icon="requests"
                 unit="M"
-                requestBreakdown={{
-                  total: usageViewMode === 'current' 
-                    ? displayMetrics?.current.totalRequests || 0 
-                    : displayMetrics?.previous.totalRequests || displayMetrics?.previous.requests || 0,
-                  blocked: usageViewMode === 'current' 
-                    ? displayMetrics?.current.blockedRequests || 0 
-                    : displayMetrics?.previous.blockedRequests || 0
-                }}
+                confidence={usageViewMode === 'current' ? displayMetrics?.current?.confidence?.requests : null}
               />
               
               <MetricCard
@@ -761,6 +706,8 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
                 percentage={calculatePercentage(usageViewMode === 'current' ? displayMetrics?.current.bytes || 0 : displayMetrics?.previous.bytes || 0, config?.applicationServices?.core?.thresholdBandwidth || config.thresholdBandwidth)}
                 icon="bandwidth"
                 unit="TB"
+                confidence={usageViewMode === 'current' ? displayMetrics?.current?.confidence?.bytes : null}
+                confidenceMetricType="HTTP Requests (measuring bytes)"
               />
 
               <MetricCard
@@ -771,6 +718,8 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
                 percentage={calculatePercentage(usageViewMode === 'current' ? displayMetrics?.current.dnsQueries || 0 : displayMetrics?.previous.dnsQueries || 0, config?.applicationServices?.core?.thresholdDnsQueries || config.thresholdDnsQueries)}
                 icon="dns"
                 unit="M"
+                confidence={usageViewMode === 'current' ? displayMetrics?.current?.confidence?.dnsQueries : null}
+                confidenceMetricType="DNS Queries"
               />
             </div>
           </>
@@ -787,29 +736,33 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
               {/* Bot Management */}
               {displayMetrics?.botManagement && displayMetrics.botManagement.enabled && (
                 <MetricCard
-                  title="Bot Management: Good Requests"
+                  title="Bot Management"
+                  subtitle="Likely Human Requests"
                   value={usageViewMode === 'current' 
-                    ? displayMetrics.botManagement.current?.goodRequests || 0
-                    : displayMetrics.botManagement.previous?.goodRequests || 0}
+                    ? displayMetrics.botManagement.current?.likelyHuman || 0
+                    : displayMetrics.botManagement.previous?.likelyHuman || 0}
                   formatted={formatRequests(usageViewMode === 'current' 
-                    ? displayMetrics.botManagement.current?.goodRequests || 0
-                    : displayMetrics.botManagement.previous?.goodRequests || 0)}
+                    ? displayMetrics.botManagement.current?.likelyHuman || 0
+                    : displayMetrics.botManagement.previous?.likelyHuman || 0)}
                   threshold={displayMetrics.botManagement.threshold}
                   percentage={calculatePercentage(
                     usageViewMode === 'current' 
-                      ? displayMetrics.botManagement.current?.goodRequests || 0
-                      : displayMetrics.botManagement.previous?.goodRequests || 0,
+                      ? displayMetrics.botManagement.current?.likelyHuman || 0
+                      : displayMetrics.botManagement.previous?.likelyHuman || 0,
                     displayMetrics.botManagement.threshold
                   )}
                   icon="traffic"
                   unit="M"
+                  confidence={usageViewMode === 'current' ? displayMetrics.botManagement.current?.confidence : null}
+                  confidenceMetricType="Likely Human Requests"
                 />
               )}
 
               {/* API Shield */}
               {displayMetrics?.apiShield && displayMetrics.apiShield.enabled && (
                 <MetricCard
-                  title="API Shield: HTTP Requests"
+                  title="API Shield"
+                  subtitle="HTTP Requests"
                   value={usageViewMode === 'current' 
                     ? displayMetrics.apiShield.current?.requests || 0
                     : displayMetrics.apiShield.previous?.requests || 0}
@@ -825,13 +778,16 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
                   )}
                   icon="requests"
                   unit="M"
+                  confidence={usageViewMode === 'current' ? displayMetrics.apiShield.current?.confidence : null}
+                  isZoneFiltered={true}
                 />
               )}
 
               {/* Page Shield */}
               {displayMetrics?.pageShield && displayMetrics.pageShield.enabled && (
                 <MetricCard
-                  title="Page Shield: HTTP Requests"
+                  title="Page Shield"
+                  subtitle="HTTP Requests"
                   value={usageViewMode === 'current' 
                     ? displayMetrics.pageShield.current?.requests || 0
                     : displayMetrics.pageShield.previous?.requests || 0}
@@ -847,13 +803,16 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
                   )}
                   icon="requests"
                   unit="M"
+                  confidence={usageViewMode === 'current' ? displayMetrics.pageShield.current?.confidence : null}
+                  isZoneFiltered={true}
                 />
               )}
 
               {/* Advanced Rate Limiting */}
               {displayMetrics?.advancedRateLimiting && displayMetrics.advancedRateLimiting.enabled && (
                 <MetricCard
-                  title="Advanced Rate Limiting: HTTP Requests"
+                  title="Advanced Rate Limiting"
+                  subtitle="HTTP Requests"
                   value={usageViewMode === 'current' 
                     ? displayMetrics.advancedRateLimiting.current?.requests || 0
                     : displayMetrics.advancedRateLimiting.previous?.requests || 0}
@@ -869,6 +828,8 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
                   )}
                   icon="requests"
                   unit="M"
+                  confidence={usageViewMode === 'current' ? displayMetrics.advancedRateLimiting.current?.confidence : null}
+                  isZoneFiltered={true}
                 />
               )}
             </div>
@@ -882,7 +843,7 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
         (displayMetrics?.apiShield && displayMetrics.apiShield.enabled) ||
         (displayMetrics?.pageShield && displayMetrics.pageShield.enabled) ||
         (displayMetrics?.advancedRateLimiting && displayMetrics.advancedRateLimiting.enabled)) && (
-        <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-lg">
+        <div className="bg-white border border-gray-200 rounded-xl p-6 mb-10">
           <div className="bg-gradient-to-r from-slate-700 to-slate-600 rounded-lg px-6 py-4 mb-6">
             <div className="flex items-center justify-between">
               <div>
@@ -1016,7 +977,7 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
                               Zone
                             </th>
                             <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                              Good Requests
+                              Likely Human Requests
                             </th>
                           </tr>
                         </thead>
@@ -1029,7 +990,7 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
                                 </div>
                               </td>
                               <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-900 font-medium">
-                                {formatRequests(zone.goodRequests || 0)}
+                                {formatRequests(zone.likelyHuman || 0)}
                               </td>
                             </tr>
                           ))}
@@ -1208,19 +1169,19 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
 
       {/* Usage Charts - 2 Column Layout */}
       {displayMetrics?.timeSeries && displayMetrics.timeSeries.length > 0 && (
-        <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-lg">
+        <div className="bg-white border border-gray-200 rounded-xl p-6 mb-10">
           <div className="bg-gradient-to-r from-slate-700 to-slate-600 rounded-lg px-6 py-4 mb-6">
             <h3 className="text-2xl font-semibold text-white tracking-tight">Monthly Usage Trends</h3>
+            <p className="text-slate-200 text-sm mt-1">
+              Historical monthly aggregated data for Enterprise zones only
+            </p>
           </div>
-          <p className="text-sm text-gray-600 mb-6">
-            Historical monthly aggregated data for Enterprise zones only
-          </p>
           
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <UsageChart
               data={displayMetrics.timeSeries}
               dataKey="requests"
-              title="HTTP Requests by Month"
+              title="HTTP Requests"
               color="#2563eb"
               threshold={config?.applicationServices?.core?.thresholdRequests || config?.thresholdRequests}
               yAxisLabel="HTTP Requests"
@@ -1229,7 +1190,7 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
             <UsageChart
               data={displayMetrics.timeSeries}
               dataKey="bytes"
-              title="Data Transfer by Month"
+              title="Data Transfer"
               color="#10b981"
               formatter={formatBytes}
               threshold={config?.applicationServices?.core?.thresholdBandwidth || config?.thresholdBandwidth}
@@ -1239,7 +1200,7 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
             <UsageChart
               data={displayMetrics.timeSeries}
               dataKey="dnsQueries"
-              title="DNS Queries by Month"
+              title="DNS Queries"
               color="#f59e0b"
               threshold={config?.applicationServices?.core?.thresholdDnsQueries || config?.thresholdDnsQueries}
               yAxisLabel="DNS Queries"
@@ -1251,11 +1212,11 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
              displayMetrics.botManagement.timeSeries.length > 0 && (
               <UsageChart
                 data={displayMetrics.botManagement.timeSeries}
-                dataKey="goodRequests"
-                title="Bot Management: Good Requests by Month"
+                dataKey="likelyHuman"
+                title="Bot Management: Likely Human Requests"
                 color="#9333ea"
                 threshold={displayMetrics.botManagement.threshold}
-                yAxisLabel="Good Requests"
+                yAxisLabel="Likely Human Requests"
               />
             )}
 
@@ -1266,7 +1227,7 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
               <UsageChart
                 data={displayMetrics.apiShield.timeSeries}
                 dataKey="requests"
-                title="API Shield: HTTP Requests by Month"
+                title="API Shield: HTTP Requests"
                 color="#06b6d4"
                 threshold={displayMetrics.apiShield.threshold}
                 yAxisLabel="HTTP Requests"
@@ -1280,7 +1241,7 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
               <UsageChart
                 data={displayMetrics.pageShield.timeSeries}
                 dataKey="requests"
-                title="Page Shield: HTTP Requests by Month"
+                title="Page Shield: HTTP Requests"
                 color="#ec4899"
                 threshold={displayMetrics.pageShield.threshold}
                 yAxisLabel="HTTP Requests"
@@ -1294,7 +1255,7 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
               <UsageChart
                 data={displayMetrics.advancedRateLimiting.timeSeries}
                 dataKey="requests"
-                title="Advanced Rate Limiting: HTTP Requests by Month"
+                title="Advanced Rate Limiting: HTTP Requests"
                 color="#f97316"
                 threshold={displayMetrics.advancedRateLimiting.threshold}
                 yAxisLabel="HTTP Requests"
