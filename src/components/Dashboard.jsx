@@ -267,6 +267,17 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
     setPrewarming(true);
     setLoading(true);
     setError(null);
+    
+    // For first-time setup: show progress phases during prewarm
+    const isFirstTime = !metrics;
+    if (isFirstTime) {
+      setLoadingPhase(1);
+      
+      // Simulate phase progression during backend prewarm
+      setTimeout(() => setLoadingPhase(2), 2000);  // Phase 2 after 2s
+      setTimeout(() => setLoadingPhase(3), 8000);  // Phase 3 after 8s
+    }
+    
     try {
       const response = await fetch('/api/cache/prewarm', {
         method: 'POST',
@@ -282,11 +293,13 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
         console.error(`❌ Refresh failed: ${result.error}`);
         alert(`❌ Refresh failed: ${result.error}`);
         setLoading(false);
+        setLoadingPhase(null);
       }
     } catch (error) {
       console.error('Refresh error:', error);
       alert('❌ Failed to refresh data. Please try again.');
       setLoading(false);
+      setLoadingPhase(null);
     } finally {
       setPrewarming(false);
     }
@@ -437,6 +450,7 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
 
   if (loading && !metrics) {
     // Show enhanced loading for initial setup
+    // Detects: no cache AND has loading phase (either from fetchData or prewarmCache first-time)
     const isInitialSetup = !cacheAge && loadingPhase;
     
     return (
