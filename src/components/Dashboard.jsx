@@ -436,12 +436,49 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
   };
 
   if (loading && !metrics) {
+    // Show enhanced loading for initial setup
+    const isInitialSetup = !cacheAge && loadingPhase;
+    
     return (
       <div className="flex items-center justify-center py-20">
-        <div className="text-center">
+        <div className="text-center max-w-md">
           <RefreshCw className="w-12 h-12 text-blue-500 animate-spin mx-auto mb-4" />
-          <p className="text-gray-600 font-medium">Loading your usage data...</p>
-          <p className="text-sm text-gray-500 mt-2">Fetching latest metrics from Cloudflare</p>
+          
+          {isInitialSetup ? (
+            <>
+              <p className="text-gray-900 font-semibold text-lg mb-2">🚀 Setting up your dashboard...</p>
+              <p className="text-gray-600 mb-4">Hold tight! We're fetching your account data from Cloudflare.</p>
+              
+              {/* Progress indicator */}
+              <div className="bg-gray-100 rounded-lg p-4 text-left space-y-2">
+                <div className="flex items-center space-x-3">
+                  <div className={`w-2 h-2 rounded-full ${
+                    loadingPhase >= 1 ? 'bg-green-500' : 'bg-gray-300'
+                  }`} />
+                  <span className="text-sm text-gray-700">Counting zones</span>
+                </div>
+                <div className="flex items-center space-x-3">
+                  <div className={`w-2 h-2 rounded-full ${
+                    loadingPhase >= 2 ? 'bg-green-500 animate-pulse' : 'bg-gray-300'
+                  }`} />
+                  <span className="text-sm text-gray-700">Fetching HTTP requests & data transfer</span>
+                </div>
+                <div className="flex items-center space-x-3">
+                  <div className={`w-2 h-2 rounded-full ${
+                    loadingPhase >= 3 ? 'bg-green-500 animate-pulse' : 'bg-gray-300'
+                  }`} />
+                  <span className="text-sm text-gray-700">Loading DNS queries & add-ons</span>
+                </div>
+              </div>
+              
+              <p className="text-xs text-gray-500 mt-4">This usually takes 20-30 seconds on first setup</p>
+            </>
+          ) : (
+            <>
+              <p className="text-gray-600 font-medium">Loading your usage data...</p>
+              <p className="text-sm text-gray-500 mt-2">Fetching latest metrics from Cloudflare</p>
+            </>
+          )}
         </div>
       </div>
     );
@@ -476,7 +513,22 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
   const showAccountFilter = accountIds.length > 1;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 relative">
+      {/* Loading overlay for refresh/prewarm */}
+      {loading && metrics && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl shadow-2xl p-8 max-w-md">
+            <RefreshCw className="w-12 h-12 text-blue-500 animate-spin mx-auto mb-4" />
+            <p className="text-gray-900 font-semibold text-lg text-center mb-2">
+              Refreshing your data...
+            </p>
+            <p className="text-gray-600 text-center text-sm">
+              Fetching the latest metrics from Cloudflare
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Account Filter & Alert Toggle */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* Account Filter */}
