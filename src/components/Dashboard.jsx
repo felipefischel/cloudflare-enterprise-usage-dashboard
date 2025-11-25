@@ -20,6 +20,7 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
   const [activeServiceTab, setActiveServiceTab] = useState(SERVICE_CATEGORIES.APPLICATION_SERVICES); // Active service tab
   const [zoneBreakdownSKU, setZoneBreakdownSKU] = useState('appServices'); // 'appServices' or 'botManagement'
   const [prewarming, setPrewarming] = useState(false); // Pre-warming cache state
+  const [isInitialSetup, setIsInitialSetup] = useState(false); // Track first-time setup in progress
 
   useEffect(() => {
     // Load alerts state from config
@@ -271,6 +272,7 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
     // For first-time setup: show progress phases during prewarm
     const isFirstTime = !metrics;
     if (isFirstTime) {
+      setIsInitialSetup(true);  // Mark as initial setup
       setLoadingPhase(1);
       
       // Simulate phase progression during backend prewarm
@@ -294,14 +296,17 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
         alert(`❌ Refresh failed: ${result.error}`);
         setLoading(false);
         setLoadingPhase(null);
+        setIsInitialSetup(false);
       }
     } catch (error) {
       console.error('Refresh error:', error);
       alert('❌ Failed to refresh data. Please try again.');
       setLoading(false);
       setLoadingPhase(null);
+      setIsInitialSetup(false);
     } finally {
       setPrewarming(false);
+      setIsInitialSetup(false);  // Always clear flag when done
     }
   };
 
@@ -448,17 +453,17 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
     return (current / threshold) * 100;
   };
 
-  if (loading && !metrics) {
+  // Show progress screen during initial setup OR when no metrics yet
+  if (isInitialSetup || (loading && !metrics)) {
     // Show enhanced loading for initial setup
-    // Detects: no cache AND has loading phase (either from fetchData or prewarmCache first-time)
-    const isInitialSetup = !cacheAge && loadingPhase;
+    const showProgress = (isInitialSetup || !cacheAge) && loadingPhase;
     
     return (
       <div className="flex items-center justify-center py-20">
         <div className="text-center max-w-md">
           <RefreshCw className="w-12 h-12 text-blue-500 animate-spin mx-auto mb-4" />
           
-          {isInitialSetup ? (
+          {showProgress ? (
             <>
               <p className="text-gray-900 font-semibold text-lg mb-2">🚀 Setting up your dashboard...</p>
               <p className="text-gray-600 mb-4">Hold tight! We're fetching your account data from Cloudflare.</p>
@@ -528,8 +533,8 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
 
   return (
     <div className="space-y-6 relative">
-      {/* Loading overlay for refresh/prewarm */}
-      {loading && metrics && (
+      {/* Loading overlay for refresh/prewarm (NOT during initial setup) */}
+      {loading && metrics && !isInitialSetup && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-white rounded-xl shadow-2xl p-8 max-w-md">
             <RefreshCw className="w-12 h-12 text-blue-500 animate-spin mx-auto mb-4" />
