@@ -695,147 +695,107 @@ async function getMetricsProgressive(request, env, corsHeaders) {
       console.log('⏭️ Zero Trust Seats disabled - skipping fetch');
     }
     
-    // Fetch Magic Transit if enabled
+    // Fetch Magic Transit and Magic WAN in PARALLEL for performance
     let magicTransitData = null;
+    let magicWanData = null;
     console.log('Network Services config:', JSON.stringify(config?.networkServices));
     const mtAccountIds = config?.networkServices?.magicTransit?.accountIds || [];
-    console.log(`Magic Transit enabled: ${config?.networkServices?.magicTransit?.enabled}, accountIds: ${JSON.stringify(mtAccountIds)}`);
-    if (config?.networkServices?.magicTransit?.enabled && mtAccountIds.length > 0) {
-      const mtStart = Date.now();
-      console.log(`🌐 Fetching Magic Transit for ${mtAccountIds.length} account(s)...`);
-      const mtConfig = config.networkServices.magicTransit;
-      
-      const mtPromises = mtAccountIds.map(accountId =>
-        fetchMagicBandwidthForAccount(apiKey, accountId, mtConfig, env, 'magicTransit')
-          .then(data => ({ accountId, data }))
-      );
-      
-      const mtResults = await Promise.allSettled(mtPromises);
-      console.log(`MT results: ${mtResults.length}, statuses: ${mtResults.map(r => r.status).join(',')}`);
-      mtResults.forEach((r, i) => {
-        if (r.status === 'fulfilled') {
-          console.log(`MT[${i}]: accountId=${r.value?.accountId}, hasData=${!!r.value?.data}`);
-        } else {
-          console.log(`MT[${i}] rejected: ${r.reason}`);
-        }
-      });
-      const mtData = mtResults
-        .filter(result => result.status === 'fulfilled' && result.value?.data)
-        .map(result => result.value);
-      console.log(`MT filtered: ${mtData.length} entries`);
-      
-      if (mtData.length > 0) {
-        // Merge timeSeries from all accounts (sum P95 values)
-        const timeSeriesMap = new Map();
-        mtData.forEach(accountEntry => {
-          if (accountEntry.data.timeSeries) {
-            accountEntry.data.timeSeries.forEach(entry => {
-              const existing = timeSeriesMap.get(entry.month);
-              if (existing) {
-                existing.p95Mbps += entry.p95Mbps || 0;
-              } else {
-                timeSeriesMap.set(entry.month, {
-                  month: entry.month,
-                  timestamp: entry.timestamp,
-                  p95Mbps: entry.p95Mbps || 0,
-                });
-              }
-            });
-          }
-        });
-
-        const mergedTimeSeries = Array.from(timeSeriesMap.values())
-          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
-        magicTransitData = {
-          enabled: true,
-          threshold: mtConfig.threshold,
-          current: {
-            p95Mbps: mtData.reduce((sum, entry) => sum + entry.data.current.p95Mbps, 0),
-          },
-          previous: {
-            p95Mbps: mtData.reduce((sum, entry) => sum + entry.data.previous.p95Mbps, 0),
-          },
-          timeSeries: mergedTimeSeries,
-          perAccountData: mtData.map(entry => ({
-            accountId: entry.accountId,
-            current: entry.data.current,
-            previous: entry.data.previous,
-            timeSeries: entry.data.timeSeries,
-          })),
-        };
-        console.log(`Magic Transit: ${magicTransitData.current.p95Mbps} Mbps current, ${magicTransitData.previous.p95Mbps} Mbps previous`);
-      }
-      timings.magicTransit = Date.now() - mtStart;
-      console.log(`⏱️ Magic Transit: ${timings.magicTransit}ms`);
-    } else {
-      console.log('⏭️ Magic Transit disabled - skipping fetch');
-    }
-    
-    // Fetch Magic WAN if enabled
-    let magicWanData = null;
     const mwAccountIds = config?.networkServices?.magicWan?.accountIds || [];
-    if (config?.networkServices?.magicWan?.enabled && mwAccountIds.length > 0) {
-      const mwStart = Date.now();
-      console.log(`🌐 Fetching Magic WAN for ${mwAccountIds.length} account(s)...`);
-      const mwConfig = config.networkServices.magicWan;
+    const mtEnabled = config?.networkServices?.magicTransit?.enabled && mtAccountIds.length > 0;
+    const mwEnabled = config?.networkServices?.magicWan?.enabled && mwAccountIds.length > 0;
+    
+    if (mtEnabled || mwEnabled) {
+      const magicStart = Date.now();
+      console.log(`🌐 Fetching Magic Transit/WAN in parallel...`);
       
-      const mwPromises = mwAccountIds.map(accountId =>
-        fetchMagicBandwidthForAccount(apiKey, accountId, mwConfig, env, 'magicWan')
-          .then(data => ({ accountId, data }))
-      );
+      const magicPromises = [];
       
-      const mwResults = await Promise.allSettled(mwPromises);
-      const mwData = mwResults
-        .filter(result => result.status === 'fulfilled' && result.value?.data)
-        .map(result => result.value);
-      
-      if (mwData.length > 0) {
-        // Merge timeSeries from all accounts
-        const timeSeriesMap = new Map();
-        mwData.forEach(accountEntry => {
-          if (accountEntry.data.timeSeries) {
-            accountEntry.data.timeSeries.forEach(entry => {
-              const existing = timeSeriesMap.get(entry.month);
-              if (existing) {
-                existing.p95Mbps += entry.p95Mbps || 0;
-              } else {
-                timeSeriesMap.set(entry.month, {
-                  month: entry.month,
-                  timestamp: entry.timestamp,
-                  p95Mbps: entry.p95Mbps || 0,
-                });
-              }
-            });
-          }
-        });
-
-        const mergedTimeSeries = Array.from(timeSeriesMap.values())
-          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
-        magicWanData = {
-          enabled: true,
-          threshold: mwConfig.threshold,
-          current: {
-            p95Mbps: mwData.reduce((sum, entry) => sum + entry.data.current.p95Mbps, 0),
-          },
-          previous: {
-            p95Mbps: mwData.reduce((sum, entry) => sum + entry.data.previous.p95Mbps, 0),
-          },
-          timeSeries: mergedTimeSeries,
-          perAccountData: mwData.map(entry => ({
-            accountId: entry.accountId,
-            current: entry.data.current,
-            previous: entry.data.previous,
-            timeSeries: entry.data.timeSeries,
-          })),
-        };
-        console.log(`Magic WAN: ${magicWanData.current.p95Mbps} Mbps current, ${magicWanData.previous.p95Mbps} Mbps previous`);
+      if (mtEnabled) {
+        const mtConfig = config.networkServices.magicTransit;
+        const mtPromise = Promise.allSettled(
+          mtAccountIds.map(accountId =>
+            fetchMagicBandwidthForAccount(apiKey, accountId, mtConfig, env, 'magicTransit')
+              .then(data => ({ accountId, data }))
+          )
+        ).then(results => ({
+          type: 'magicTransit',
+          config: mtConfig,
+          data: results.filter(r => r.status === 'fulfilled' && r.value?.data).map(r => r.value)
+        }));
+        magicPromises.push(mtPromise);
       }
-      timings.magicWan = Date.now() - mwStart;
-      console.log(`⏱️ Magic WAN: ${timings.magicWan}ms`);
+      
+      if (mwEnabled) {
+        const mwConfig = config.networkServices.magicWan;
+        const mwPromise = Promise.allSettled(
+          mwAccountIds.map(accountId =>
+            fetchMagicBandwidthForAccount(apiKey, accountId, mwConfig, env, 'magicWan')
+              .then(data => ({ accountId, data }))
+          )
+        ).then(results => ({
+          type: 'magicWan',
+          config: mwConfig,
+          data: results.filter(r => r.status === 'fulfilled' && r.value?.data).map(r => r.value)
+        }));
+        magicPromises.push(mwPromise);
+      }
+      
+      const magicResults = await Promise.all(magicPromises);
+      
+      for (const result of magicResults) {
+        if (result.data.length > 0) {
+          const timeSeriesMap = new Map();
+          result.data.forEach(accountEntry => {
+            if (accountEntry.data.timeSeries) {
+              accountEntry.data.timeSeries.forEach(entry => {
+                const existing = timeSeriesMap.get(entry.month);
+                if (existing) {
+                  existing.p95Mbps += entry.p95Mbps || 0;
+                } else {
+                  timeSeriesMap.set(entry.month, {
+                    month: entry.month,
+                    timestamp: entry.timestamp,
+                    p95Mbps: entry.p95Mbps || 0,
+                  });
+                }
+              });
+            }
+          });
+
+          const mergedTimeSeries = Array.from(timeSeriesMap.values())
+            .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+          const serviceData = {
+            enabled: true,
+            threshold: result.config.threshold,
+            current: {
+              p95Mbps: result.data.reduce((sum, entry) => sum + entry.data.current.p95Mbps, 0),
+            },
+            previous: {
+              p95Mbps: result.data.reduce((sum, entry) => sum + entry.data.previous.p95Mbps, 0),
+            },
+            timeSeries: mergedTimeSeries,
+            perAccountData: result.data.map(entry => ({
+              accountId: entry.accountId,
+              current: entry.data.current,
+              previous: entry.data.previous,
+              timeSeries: entry.data.timeSeries,
+            })),
+          };
+
+          if (result.type === 'magicTransit') {
+            magicTransitData = serviceData;
+            console.log(`Magic Transit: ${magicTransitData.current.p95Mbps} Mbps current, ${magicTransitData.previous.p95Mbps} Mbps previous`);
+          } else {
+            magicWanData = serviceData;
+            console.log(`Magic WAN: ${magicWanData.current.p95Mbps} Mbps current, ${magicWanData.previous.p95Mbps} Mbps previous`);
+          }
+        }
+      }
+      timings.magicTransitWan = Date.now() - magicStart;
+      console.log(`⏱️ Magic Transit/WAN (parallel): ${timings.magicTransitWan}ms`);
     } else {
-      console.log('⏭️ Magic WAN disabled - skipping fetch');
+      console.log('⏭️ Magic Transit/WAN disabled - skipping fetch');
     }
     
     // Log timing summary
@@ -4263,128 +4223,106 @@ async function preWarmCache(env) {
       console.log('Pre-warm: Zero Trust Seats disabled - skipping fetch');
     }
     
-    // Fetch Magic Transit if enabled
+    // Fetch Magic Transit and Magic WAN in PARALLEL for performance
     let magicTransitData = null;
-    const mtAccountIds = config?.networkServices?.magicTransit?.accountIds || [];
-    if (config?.networkServices?.magicTransit?.enabled && mtAccountIds.length > 0) {
-      console.log(`Pre-warm: Fetching Magic Transit for ${mtAccountIds.length} account(s)...`);
-      const mtConfig = config.networkServices.magicTransit;
-      
-      const mtPromises = mtAccountIds.map(accountId =>
-        fetchMagicBandwidthForAccount(apiKey, accountId, mtConfig, env, 'magicTransit')
-          .then(data => ({ accountId, data }))
-      );
-      
-      const mtResults = await Promise.allSettled(mtPromises);
-      const mtData = mtResults
-        .filter(result => result.status === 'fulfilled' && result.value?.data)
-        .map(result => result.value);
-      
-      if (mtData.length > 0) {
-        const timeSeriesMap = new Map();
-        mtData.forEach(accountEntry => {
-          if (accountEntry.data.timeSeries) {
-            accountEntry.data.timeSeries.forEach(entry => {
-              const existing = timeSeriesMap.get(entry.month);
-              if (existing) {
-                existing.p95Mbps += entry.p95Mbps || 0;
-              } else {
-                timeSeriesMap.set(entry.month, {
-                  month: entry.month,
-                  timestamp: entry.timestamp,
-                  p95Mbps: entry.p95Mbps || 0,
-                });
-              }
-            });
-          }
-        });
-
-        const mergedTimeSeries = Array.from(timeSeriesMap.values())
-          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
-        magicTransitData = {
-          enabled: true,
-          threshold: mtConfig.threshold,
-          current: {
-            p95Mbps: mtData.reduce((sum, entry) => sum + entry.data.current.p95Mbps, 0),
-          },
-          previous: {
-            p95Mbps: mtData.reduce((sum, entry) => sum + entry.data.previous.p95Mbps, 0),
-          },
-          timeSeries: mergedTimeSeries,
-          perAccountData: mtData.map(entry => ({
-            accountId: entry.accountId,
-            current: entry.data.current,
-            previous: entry.data.previous,
-            timeSeries: entry.data.timeSeries,
-          })),
-        };
-        console.log(`Pre-warm: Magic Transit fetched (${magicTransitData.current.p95Mbps} Mbps current)`);
-      }
-    } else {
-      console.log('Pre-warm: Magic Transit disabled - skipping fetch');
-    }
-    
-    // Fetch Magic WAN if enabled
     let magicWanData = null;
+    const mtAccountIds = config?.networkServices?.magicTransit?.accountIds || [];
     const mwAccountIds = config?.networkServices?.magicWan?.accountIds || [];
-    if (config?.networkServices?.magicWan?.enabled && mwAccountIds.length > 0) {
-      console.log(`Pre-warm: Fetching Magic WAN for ${mwAccountIds.length} account(s)...`);
-      const mwConfig = config.networkServices.magicWan;
+    const mtEnabled = config?.networkServices?.magicTransit?.enabled && mtAccountIds.length > 0;
+    const mwEnabled = config?.networkServices?.magicWan?.enabled && mwAccountIds.length > 0;
+    
+    if (mtEnabled || mwEnabled) {
+      console.log(`Pre-warm: Fetching Magic Transit/WAN in parallel...`);
       
-      const mwPromises = mwAccountIds.map(accountId =>
-        fetchMagicBandwidthForAccount(apiKey, accountId, mwConfig, env, 'magicWan')
-          .then(data => ({ accountId, data }))
-      );
+      // Build promises for both services
+      const magicPromises = [];
       
-      const mwResults = await Promise.allSettled(mwPromises);
-      const mwData = mwResults
-        .filter(result => result.status === 'fulfilled' && result.value?.data)
-        .map(result => result.value);
+      if (mtEnabled) {
+        const mtConfig = config.networkServices.magicTransit;
+        const mtPromise = Promise.allSettled(
+          mtAccountIds.map(accountId =>
+            fetchMagicBandwidthForAccount(apiKey, accountId, mtConfig, env, 'magicTransit')
+              .then(data => ({ accountId, data }))
+          )
+        ).then(results => ({
+          type: 'magicTransit',
+          config: mtConfig,
+          data: results.filter(r => r.status === 'fulfilled' && r.value?.data).map(r => r.value)
+        }));
+        magicPromises.push(mtPromise);
+      }
       
-      if (mwData.length > 0) {
-        const timeSeriesMap = new Map();
-        mwData.forEach(accountEntry => {
-          if (accountEntry.data.timeSeries) {
-            accountEntry.data.timeSeries.forEach(entry => {
-              const existing = timeSeriesMap.get(entry.month);
-              if (existing) {
-                existing.p95Mbps += entry.p95Mbps || 0;
-              } else {
-                timeSeriesMap.set(entry.month, {
-                  month: entry.month,
-                  timestamp: entry.timestamp,
-                  p95Mbps: entry.p95Mbps || 0,
-                });
-              }
-            });
+      if (mwEnabled) {
+        const mwConfig = config.networkServices.magicWan;
+        const mwPromise = Promise.allSettled(
+          mwAccountIds.map(accountId =>
+            fetchMagicBandwidthForAccount(apiKey, accountId, mwConfig, env, 'magicWan')
+              .then(data => ({ accountId, data }))
+          )
+        ).then(results => ({
+          type: 'magicWan',
+          config: mwConfig,
+          data: results.filter(r => r.status === 'fulfilled' && r.value?.data).map(r => r.value)
+        }));
+        magicPromises.push(mwPromise);
+      }
+      
+      // Execute both in parallel
+      const magicResults = await Promise.all(magicPromises);
+      
+      // Process results
+      for (const result of magicResults) {
+        if (result.data.length > 0) {
+          const timeSeriesMap = new Map();
+          result.data.forEach(accountEntry => {
+            if (accountEntry.data.timeSeries) {
+              accountEntry.data.timeSeries.forEach(entry => {
+                const existing = timeSeriesMap.get(entry.month);
+                if (existing) {
+                  existing.p95Mbps += entry.p95Mbps || 0;
+                } else {
+                  timeSeriesMap.set(entry.month, {
+                    month: entry.month,
+                    timestamp: entry.timestamp,
+                    p95Mbps: entry.p95Mbps || 0,
+                  });
+                }
+              });
+            }
+          });
+
+          const mergedTimeSeries = Array.from(timeSeriesMap.values())
+            .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+          const serviceData = {
+            enabled: true,
+            threshold: result.config.threshold,
+            current: {
+              p95Mbps: result.data.reduce((sum, entry) => sum + entry.data.current.p95Mbps, 0),
+            },
+            previous: {
+              p95Mbps: result.data.reduce((sum, entry) => sum + entry.data.previous.p95Mbps, 0),
+            },
+            timeSeries: mergedTimeSeries,
+            perAccountData: result.data.map(entry => ({
+              accountId: entry.accountId,
+              current: entry.data.current,
+              previous: entry.data.previous,
+              timeSeries: entry.data.timeSeries,
+            })),
+          };
+
+          if (result.type === 'magicTransit') {
+            magicTransitData = serviceData;
+            console.log(`Pre-warm: Magic Transit fetched (${magicTransitData.current.p95Mbps} Mbps current)`);
+          } else {
+            magicWanData = serviceData;
+            console.log(`Pre-warm: Magic WAN fetched (${magicWanData.current.p95Mbps} Mbps current)`);
           }
-        });
-
-        const mergedTimeSeries = Array.from(timeSeriesMap.values())
-          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
-        magicWanData = {
-          enabled: true,
-          threshold: mwConfig.threshold,
-          current: {
-            p95Mbps: mwData.reduce((sum, entry) => sum + entry.data.current.p95Mbps, 0),
-          },
-          previous: {
-            p95Mbps: mwData.reduce((sum, entry) => sum + entry.data.previous.p95Mbps, 0),
-          },
-          timeSeries: mergedTimeSeries,
-          perAccountData: mwData.map(entry => ({
-            accountId: entry.accountId,
-            current: entry.data.current,
-            previous: entry.data.previous,
-            timeSeries: entry.data.timeSeries,
-          })),
-        };
-        console.log(`Pre-warm: Magic WAN fetched (${magicWanData.current.p95Mbps} Mbps current)`);
+        }
       }
     } else {
-      console.log('Pre-warm: Magic WAN disabled - skipping fetch');
+      console.log('Pre-warm: Magic Transit/WAN disabled - skipping fetch');
     }
     
     // Store in cache with timestamp (only enabled metrics)
