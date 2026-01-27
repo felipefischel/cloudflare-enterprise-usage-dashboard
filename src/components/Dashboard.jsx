@@ -1579,12 +1579,21 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
       );
     }
 
-    // Helper to format Mbps nicely
+    // Helper to format Mbps nicely (handles small values)
     const formatBandwidth = (mbps) => {
       if (mbps >= 1000) {
         return `${(mbps / 1000).toFixed(2)} Gbps`;
       }
-      return `${mbps.toFixed(2)} Mbps`;
+      if (mbps >= 1) {
+        return `${mbps.toFixed(2)} Mbps`;
+      }
+      if (mbps >= 0.001) {
+        return `${(mbps * 1000).toFixed(2)} Kbps`;
+      }
+      if (mbps > 0) {
+        return `${(mbps * 1000000).toFixed(2)} bps`;
+      }
+      return '0 Mbps';
     };
 
     return (
