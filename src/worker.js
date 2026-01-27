@@ -3187,10 +3187,19 @@ async function fetchMagicBandwidthForAccount(apiKey, accountId, serviceConfig, e
     }
   `;
 
-  // Fetch current month data
+  // Fetch current month data - use short-term cache to avoid API inconsistency
   let currentP95Mbps = 0;
-  try {
-    const response = await fetch('https://api.cloudflare.com/client/v4/graphql', {
+  const currentMonthCacheKey = `current-${serviceType}:${accountId}:${currentMonthKey}:${currentMonthEnd.getHours()}`;
+  const cachedCurrentMonth = await env.CONFIG_KV.get(currentMonthCacheKey, 'json');
+  
+  if (cachedCurrentMonth && (Date.now() - cachedCurrentMonth.cachedAt) < 5 * 60 * 1000) {
+    // Use cached data if less than 5 minutes old
+    currentP95Mbps = cachedCurrentMonth.p95Mbps;
+    console.log(`${serviceType} current month from cache: ${currentP95Mbps.toFixed(6)} Mbps (age: ${Math.round((Date.now() - cachedCurrentMonth.cachedAt) / 1000)}s)`);
+  } else {
+    // Fetch fresh data from API
+    try {
+      const response = await fetch('https://api.cloudflare.com/client/v4/graphql', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${apiKey}`,
@@ -3217,49 +3226,54 @@ async function fetchMagicBandwidthForAccount(apiKey, accountId, serviceConfig, e
       const tunnelData = data?.data?.viewer?.accounts?.[0]?.magicTransitTunnelTrafficAdaptiveGroups || [];
       console.log(`${serviceType} received ${tunnelData.length} intervals with data for account ${accountId}`);
       
-      // Calculate total number of 5-minute intervals in the time period
-      const totalIntervals = Math.floor((currentMonthEnd.getTime() - currentMonthStart.getTime()) / (5 * 60 * 1000));
-      console.log(`${serviceType} total possible 5-min intervals: ${totalIntervals}`);
-      
-      // Create array of all intervals initialized to 0, then fill in data from API
-      // This ensures P95 calculation includes all intervals (most will be 0)
-      const allBandwidthSamples = new Array(totalIntervals).fill(0);
-      
-      // Map API results to bandwidth values (bits/sec)
-      tunnelData.forEach(entry => {
-        const bitsPerSec = (entry.sum?.bits || 0) / 300;
-        // Find the index for this interval (we don't need exact mapping, just need the values)
-        // Since we're calculating P95, the order doesn't matter - we just need all values
-        const idx = allBandwidthSamples.findIndex(v => v === 0);
-        if (idx !== -1) {
-          allBandwidthSamples[idx] = bitsPerSec;
-        }
-      });
-      
-      // Sort for P95 calculation
-      allBandwidthSamples.sort((a, b) => a - b);
+      // Map API results to bandwidth values (bits/sec) - only non-zero intervals
+      // P95 billing is calculated from actual traffic intervals, not all possible intervals
+      const bandwidthSamples = tunnelData
+        .map(entry => (entry.sum?.bits || 0) / 300)
+        .filter(bps => bps > 0)
+        .sort((a, b) => a - b);
       
       // Debug info
-      const nonZeroCount = allBandwidthSamples.filter(v => v > 0).length;
       const totalBits = tunnelData.reduce((sum, e) => sum + (e.sum?.bits || 0), 0);
-      console.log(`${serviceType} non-zero intervals: ${nonZeroCount}, total bits: ${totalBits} (${(totalBits / 8 / 1000000).toFixed(4)} MB)`);
+      console.log(`${serviceType} ${bandwidthSamples.length} traffic intervals, total: ${(totalBits / 8 / 1000000).toFixed(2)} MB`);
       
-      // P95: 95th percentile from ALL intervals (including zeros)
-      const p95Index = Math.floor(allBandwidthSamples.length * 0.95);
-      const p95BitsPerSecond = allBandwidthSamples[Math.min(p95Index, allBandwidthSamples.length - 1)];
-      console.log(`${serviceType} P95 index: ${p95Index}/${allBandwidthSamples.length}, P95 raw: ${p95BitsPerSecond.toFixed(2)} bits/sec`);
+      // P95: 95th percentile from intervals with actual traffic
+      const p95Index = Math.floor(bandwidthSamples.length * 0.95);
+      const p95BitsPerSecond = bandwidthSamples.length > 0 
+        ? bandwidthSamples[Math.min(p95Index, bandwidthSamples.length - 1)]
+        : 0;
+      console.log(`${serviceType} P95 index: ${p95Index}/${bandwidthSamples.length}, P95: ${p95BitsPerSecond.toFixed(2)} bits/sec`);
       
       // Convert bits/sec to Mbps
       currentP95Mbps = p95BitsPerSecond / 1000000;
       console.log(`${serviceType} P95 bandwidth for account ${accountId}: ${currentP95Mbps.toFixed(6)} Mbps`);
+      
+      // Only update cache if we got more intervals than before (API can return inconsistent data)
+      const shouldUpdateCache = !cachedCurrentMonth || 
+        bandwidthSamples.length > (cachedCurrentMonth.intervalCount || 0) ||
+        (Date.now() - cachedCurrentMonth.cachedAt) > 15 * 60 * 1000; // Force update after 15 min
+      
+      if (shouldUpdateCache) {
+        await env.CONFIG_KV.put(
+          currentMonthCacheKey,
+          JSON.stringify({ p95Mbps: currentP95Mbps, intervalCount: bandwidthSamples.length, cachedAt: Date.now() }),
+          { expirationTtl: 3600 }
+        );
+        console.log(`${serviceType} cached new value: ${currentP95Mbps.toFixed(6)} Mbps (${bandwidthSamples.length} intervals)`);
+      } else {
+        // Use cached value if it had more intervals
+        currentP95Mbps = cachedCurrentMonth.p95Mbps;
+        console.log(`${serviceType} keeping cached value: ${currentP95Mbps.toFixed(6)} Mbps (had ${cachedCurrentMonth.intervalCount} intervals vs ${bandwidthSamples.length})`);
+      }
     } else {
       const errorText = await response.text();
       console.error(`Failed to fetch ${serviceType} bandwidth for account ${accountId}: ${response.status} - ${errorText}`);
       return null;
     }
-  } catch (error) {
-    console.error(`Error fetching ${serviceType} bandwidth for account ${accountId}:`, error);
-    return null;
+    } catch (error) {
+      console.error(`Error fetching ${serviceType} bandwidth for account ${accountId}:`, error);
+      return null;
+    }
   }
 
   // Get previous month data - first try cache, then fetch from API
@@ -3294,25 +3308,19 @@ async function fetchMagicBandwidthForAccount(apiKey, accountId, serviceConfig, e
         const prevData = await prevResponse.json();
         const prevTunnelData = prevData?.data?.viewer?.accounts?.[0]?.magicTransitTunnelTrafficAdaptiveGroups || [];
         
-        // Calculate total 5-min intervals in previous month
-        const prevTotalIntervals = Math.floor((previousMonthEnd.getTime() - previousMonthStart.getTime()) / (5 * 60 * 1000));
-        const prevAllSamples = new Array(prevTotalIntervals).fill(0);
+        // P95 from intervals with actual traffic only
+        const prevSamples = prevTunnelData
+          .map(entry => (entry.sum?.bits || 0) / 300)
+          .filter(bps => bps > 0)
+          .sort((a, b) => a - b);
         
-        // Fill in non-zero values from API
-        prevTunnelData.forEach(entry => {
-          const bitsPerSec = (entry.sum?.bits || 0) / 300;
-          const idx = prevAllSamples.findIndex(v => v === 0);
-          if (idx !== -1) {
-            prevAllSamples[idx] = bitsPerSec;
-          }
-        });
-        
-        prevAllSamples.sort((a, b) => a - b);
-        const p95Index = Math.floor(prevAllSamples.length * 0.95);
-        const p95BitsPerSecond = prevAllSamples[Math.min(p95Index, prevAllSamples.length - 1)];
+        const p95Index = Math.floor(prevSamples.length * 0.95);
+        const p95BitsPerSecond = prevSamples.length > 0 
+          ? prevSamples[Math.min(p95Index, prevSamples.length - 1)]
+          : 0;
         previousP95Mbps = p95BitsPerSecond / 1000000;
         
-        console.log(`${serviceType} previous month from API: ${previousP95Mbps.toFixed(6)} Mbps (${prevTunnelData.length} data intervals / ${prevTotalIntervals} total)`);
+        console.log(`${serviceType} previous month from API: ${previousP95Mbps.toFixed(6)} Mbps (${prevSamples.length} traffic intervals)`);
         
         // Cache the fetched previous month data
         await env.CONFIG_KV.put(
