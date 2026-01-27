@@ -3162,24 +3162,29 @@ async function fetchMagicBandwidthForAccount(apiKey, accountId, serviceConfig, e
     currentMonthEnd.setHours(currentMonthEnd.getHours() - 1);
   }
 
-  // GraphQL query for Magic Transit tunnel traffic - aggregate bandwidth per 5-min interval
-  // Uses sum.bits to get total bits transferred, then divide by 300 to get bits/sec
+  // GraphQL query for Magic Transit tunnel traffic
+  // Uses avg.bitRateFiveMinutes which returns bits/sec directly
+  // Filter by direction: ingress for Magic Transit (billing uses ingress only)
+  // For Magic WAN, billing uses max(ingress, egress) - we'll query egress for WAN
+  const direction = serviceType === 'magicTransit' ? 'ingress' : 'egress';
   const query = `
-    query GetTunnelBandwidth($accountTag: String!, $datetimeStart: Date!, $datetimeEnd: Date!) {
+    query GetTunnelBandwidth($accountTag: String!, $datetimeStart: Date!, $datetimeEnd: Date!, $direction: String!) {
       viewer {
         accounts(filter: {accountTag: $accountTag}) {
           magicTransitTunnelTrafficAdaptiveGroups(
             limit: 10000,
             filter: {
               datetime_geq: $datetimeStart,
-              datetime_lt: $datetimeEnd
+              datetime_lt: $datetimeEnd,
+              direction: $direction
             }
           ) {
-            sum {
-              bits
+            avg {
+              bitRateFiveMinutes
             }
             dimensions {
               datetimeFiveMinutes
+              tunnelName
             }
           }
         }
@@ -3189,7 +3194,8 @@ async function fetchMagicBandwidthForAccount(apiKey, accountId, serviceConfig, e
 
   // Fetch current month data - use short-term cache to avoid API inconsistency
   let currentP95Mbps = 0;
-  const currentMonthCacheKey = `current-${serviceType}:${accountId}:${currentMonthKey}:${currentMonthEnd.getHours()}`;
+  // v2 cache key - invalidates old cache after fixing bitRate calculation
+  const currentMonthCacheKey = `current-v2-${serviceType}:${accountId}:${currentMonthKey}:${currentMonthEnd.getHours()}`;
   const cachedCurrentMonth = await env.CONFIG_KV.get(currentMonthCacheKey, 'json');
   
   if (cachedCurrentMonth && (Date.now() - cachedCurrentMonth.cachedAt) < 5 * 60 * 1000) {
@@ -3211,6 +3217,7 @@ async function fetchMagicBandwidthForAccount(apiKey, accountId, serviceConfig, e
           accountTag: accountId,
           datetimeStart: currentMonthStart.toISOString(),
           datetimeEnd: currentMonthEnd.toISOString(),
+          direction: direction,
         },
       }),
     });
@@ -3224,18 +3231,35 @@ async function fetchMagicBandwidthForAccount(apiKey, accountId, serviceConfig, e
       }
       
       const tunnelData = data?.data?.viewer?.accounts?.[0]?.magicTransitTunnelTrafficAdaptiveGroups || [];
-      console.log(`${serviceType} received ${tunnelData.length} intervals with data for account ${accountId}`);
+      console.log(`${serviceType} (${direction}) received ${tunnelData.length} intervals for account ${accountId}`);
       
-      // Map API results to bandwidth values (bits/sec) - only non-zero intervals
-      // P95 billing is calculated from actual traffic intervals, not all possible intervals
-      const bandwidthSamples = tunnelData
-        .map(entry => (entry.sum?.bits || 0) / 300)
+      // Debug: show unique tunnels and sample values
+      const tunnelNames = [...new Set(tunnelData.map(e => e.dimensions?.tunnelName))];
+      console.log(`${serviceType} tunnels: ${tunnelNames.join(', ')}`);
+      if (tunnelData.length > 0 && tunnelData.length <= 5) {
+        tunnelData.forEach((e, i) => {
+          console.log(`  [${i}] tunnel=${e.dimensions?.tunnelName}, time=${e.dimensions?.datetimeFiveMinutes}, bitRate=${e.avg?.bitRateFiveMinutes}`);
+        });
+      }
+      
+      // Group by time interval and sum across tunnels (billing sums all tunnels per interval)
+      const intervalMap = new Map();
+      tunnelData.forEach(entry => {
+        const time = entry.dimensions?.datetimeFiveMinutes;
+        const bitRate = entry.avg?.bitRateFiveMinutes || 0;
+        intervalMap.set(time, (intervalMap.get(time) || 0) + bitRate);
+      });
+      
+      // bitRateFiveMinutes appears to be total bits for the interval, not bits/sec
+      // Divide by 300 (seconds in 5 min) to get actual bits/sec rate
+      const bandwidthSamples = Array.from(intervalMap.values())
+        .map(totalBits => totalBits / 300)
         .filter(bps => bps > 0)
         .sort((a, b) => a - b);
       
       // Debug info
-      const totalBits = tunnelData.reduce((sum, e) => sum + (e.sum?.bits || 0), 0);
-      console.log(`${serviceType} ${bandwidthSamples.length} traffic intervals, total: ${(totalBits / 8 / 1000000).toFixed(2)} MB`);
+      const maxRaw = Math.max(...Array.from(intervalMap.values()));
+      console.log(`${serviceType} ${tunnelNames.length} tunnels, ${intervalMap.size} intervals, max raw=${maxRaw}, max rate=${(maxRaw/300).toFixed(0)} bps`);
       
       // P95: 95th percentile from intervals with actual traffic
       const p95Index = Math.floor(bandwidthSamples.length * 0.95);
@@ -3300,6 +3324,7 @@ async function fetchMagicBandwidthForAccount(apiKey, accountId, serviceConfig, e
             accountTag: accountId,
             datetimeStart: previousMonthStart.toISOString(),
             datetimeEnd: previousMonthEnd.toISOString(),
+            direction: direction,
           },
         }),
       });
@@ -3308,9 +3333,9 @@ async function fetchMagicBandwidthForAccount(apiKey, accountId, serviceConfig, e
         const prevData = await prevResponse.json();
         const prevTunnelData = prevData?.data?.viewer?.accounts?.[0]?.magicTransitTunnelTrafficAdaptiveGroups || [];
         
-        // P95 from intervals with actual traffic only
+        // P95 from intervals with actual traffic only - divide by 300 to convert to bits/sec
         const prevSamples = prevTunnelData
-          .map(entry => (entry.sum?.bits || 0) / 300)
+          .map(entry => (entry.avg?.bitRateFiveMinutes || 0) / 300)
           .filter(bps => bps > 0)
           .sort((a, b) => a - b);
         
