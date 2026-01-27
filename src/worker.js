@@ -3215,16 +3215,15 @@ async function fetchMagicBandwidthForAccount(apiKey, accountId, serviceConfig, e
       
       if (tunnelData.length > 0) {
         // Convert sum.bits to bits/sec for each 5-min interval (divide by 300 seconds)
-        // Then calculate P95 across all intervals
+        // Include all intervals (including zeros) for stable P95 calculation
         const bandwidthSamples = tunnelData
           .map(entry => {
             const totalBits = entry.sum?.bits || 0;
             return totalBits / 300; // Convert to bits/sec (5 min = 300 sec)
           })
-          .filter(rate => rate > 0)
           .sort((a, b) => a - b);
         
-        console.log(`${serviceType} has ${bandwidthSamples.length} non-zero bandwidth samples`);
+        console.log(`${serviceType} has ${bandwidthSamples.length} total intervals (including zeros)`);
         
         if (bandwidthSamples.length > 0) {
           // P95: sort ascending, take the value at 95th percentile index
@@ -3281,7 +3280,6 @@ async function fetchMagicBandwidthForAccount(apiKey, accountId, serviceConfig, e
         if (prevTunnelData.length > 0) {
           const prevBandwidthSamples = prevTunnelData
             .map(entry => (entry.sum?.bits || 0) / 300)
-            .filter(rate => rate > 0)
             .sort((a, b) => a - b);
           
           if (prevBandwidthSamples.length > 0) {
