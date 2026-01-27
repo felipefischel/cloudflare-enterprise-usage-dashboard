@@ -311,6 +311,10 @@ async function getMetricsProgressive(request, env, corsHeaders) {
     // Only fetch metrics that are ENABLED in config
     const configData = await env.CONFIG_KV.get('config:default');
     const config = configData ? JSON.parse(configData) : {};
+    console.log('Loaded config from KV - networkServices:', JSON.stringify(config?.networkServices));
+    
+    const timings = {}; // Track timing for each API call section
+    const overallStart = Date.now();
     
     let coreMetrics = null;
     let botManagementData = null;
@@ -319,6 +323,7 @@ async function getMetricsProgressive(request, env, corsHeaders) {
     // Fetch App Services Core if enabled
     if (config?.applicationServices?.core?.enabled !== false) {
       // Default to enabled for backward compatibility
+      const coreStart = Date.now();
       console.log('📊 Fetching App Services Core metrics...');
       const accountMetricsPromises = accountIds.map(accountId => 
         fetchAccountMetrics(apiKey, accountId, env)
@@ -334,12 +339,15 @@ async function getMetricsProgressive(request, env, corsHeaders) {
       } else {
         console.warn('⚠️ Failed to fetch core metrics from any account');
       }
+      timings.appServicesCore = Date.now() - coreStart;
+      console.log(`⏱️ App Services Core: ${timings.appServicesCore}ms`);
     } else {
       console.log('⏭️ App Services Core disabled - skipping fetch');
     }
     
     // Fetch Bot Management if enabled
     if (config?.applicationServices?.botManagement?.enabled && accountIds.length > 0) {
+      const botStart = Date.now();
       console.log('🤖 Fetching Bot Management metrics...');
       const botManagementConfig = config.applicationServices.botManagement;
       
@@ -402,6 +410,8 @@ async function getMetricsProgressive(request, env, corsHeaders) {
           })),
         };
       }
+      timings.botManagement = Date.now() - botStart;
+      console.log(`⏱️ Bot Management: ${timings.botManagement}ms`);
     } else {
       console.log('⏭️ Bot Management disabled - skipping fetch');
     }
@@ -409,6 +419,7 @@ async function getMetricsProgressive(request, env, corsHeaders) {
     // Fetch API Shield if enabled (reuses existing zone data!)
     let apiShieldData = null;
     if (config?.applicationServices?.apiShield?.enabled && successfulMetrics && successfulMetrics.length > 0) {
+      const apiShieldStart = Date.now();
       console.log('🛡️ Calculating API Shield metrics from existing zone data...');
       const apiShieldConfig = config.applicationServices.apiShield;
       
@@ -470,6 +481,8 @@ async function getMetricsProgressive(request, env, corsHeaders) {
         };
         console.log(`API Shield data calculated (${apiShieldData.current.zones.length} zones)`);
       }
+      timings.apiShield = Date.now() - apiShieldStart;
+      console.log(`⏱️ API Shield: ${timings.apiShield}ms`);
     } else {
       console.log('⏭️ API Shield disabled - skipping calculation');
     }
@@ -477,6 +490,7 @@ async function getMetricsProgressive(request, env, corsHeaders) {
     // Fetch Page Shield if enabled (reuses existing zone data!)
     let pageShieldData = null;
     if (config?.applicationServices?.pageShield?.enabled && successfulMetrics && successfulMetrics.length > 0) {
+      const pageShieldStart = Date.now();
       console.log('📄 Calculating Page Shield metrics from existing zone data...');
       const pageShieldConfig = config.applicationServices.pageShield;
       
@@ -538,6 +552,8 @@ async function getMetricsProgressive(request, env, corsHeaders) {
         };
         console.log(`Page Shield data calculated (${pageShieldData.current.zones.length} zones)`);
       }
+      timings.pageShield = Date.now() - pageShieldStart;
+      console.log(`⏱️ Page Shield: ${timings.pageShield}ms`);
     } else {
       console.log('⏭️ Page Shield disabled - skipping calculation');
     }
@@ -545,6 +561,7 @@ async function getMetricsProgressive(request, env, corsHeaders) {
     // Fetch Advanced Rate Limiting if enabled (reuses existing zone data!)
     let advancedRateLimitingData = null;
     if (config?.applicationServices?.advancedRateLimiting?.enabled && successfulMetrics && successfulMetrics.length > 0) {
+      const rateLimitingStart = Date.now();
       console.log('⚡ Calculating Advanced Rate Limiting metrics from existing zone data...');
       const rateLimitingConfig = config.applicationServices.advancedRateLimiting;
       
@@ -606,9 +623,227 @@ async function getMetricsProgressive(request, env, corsHeaders) {
         };
         console.log(`Advanced Rate Limiting data calculated (${advancedRateLimitingData.current.zones.length} zones)`);
       }
+      timings.advancedRateLimiting = Date.now() - rateLimitingStart;
+      console.log(`⏱️ Advanced Rate Limiting: ${timings.advancedRateLimiting}ms`);
     } else {
       console.log('⏭️ Advanced Rate Limiting disabled - skipping calculation');
     }
+    
+    // Fetch Zero Trust Seats if enabled
+    let zeroTrustSeatsData = null;
+    const ztSeatsAccountIds = config?.zeroTrust?.seats?.accountIds || [];
+    if (config?.zeroTrust?.seats?.enabled && ztSeatsAccountIds.length > 0) {
+      const ztSeatsStart = Date.now();
+      console.log(`🔐 Fetching Zero Trust Seats for ${ztSeatsAccountIds.length} account(s)...`);
+      const seatsConfig = config.zeroTrust.seats;
+      
+      const seatsPromises = ztSeatsAccountIds.map(accountId =>
+        fetchZeroTrustSeatsForAccount(apiKey, accountId, seatsConfig, env)
+          .then(data => ({ accountId, data }))
+      );
+      
+      const seatsResults = await Promise.allSettled(seatsPromises);
+      const seatsData = seatsResults
+        .filter(result => result.status === 'fulfilled' && result.value?.data)
+        .map(result => result.value);
+      
+      if (seatsData.length > 0) {
+        // Merge timeSeries from all accounts
+        const timeSeriesMap = new Map();
+        seatsData.forEach(accountEntry => {
+          if (accountEntry.data.timeSeries) {
+            accountEntry.data.timeSeries.forEach(entry => {
+              const existing = timeSeriesMap.get(entry.month);
+              if (existing) {
+                existing.seats += entry.seats || 0;
+              } else {
+                timeSeriesMap.set(entry.month, {
+                  month: entry.month,
+                  timestamp: entry.timestamp,
+                  seats: entry.seats || 0,
+                });
+              }
+            });
+          }
+        });
+
+        const mergedTimeSeries = Array.from(timeSeriesMap.values())
+          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+        zeroTrustSeatsData = {
+          enabled: true,
+          threshold: seatsConfig.threshold,
+          current: {
+            seats: seatsData.reduce((sum, entry) => sum + entry.data.current.seats, 0),
+          },
+          previous: {
+            seats: seatsData.reduce((sum, entry) => sum + entry.data.previous.seats, 0),
+          },
+          timeSeries: mergedTimeSeries,
+          perAccountData: seatsData.map(entry => ({
+            accountId: entry.accountId,
+            current: entry.data.current,
+            previous: entry.data.previous,
+            timeSeries: entry.data.timeSeries,
+          })),
+        };
+        console.log(`Zero Trust Seats: ${zeroTrustSeatsData.current.seats} current, ${zeroTrustSeatsData.previous.seats} previous`);
+      }
+      timings.zeroTrustSeats = Date.now() - ztSeatsStart;
+      console.log(`⏱️ Zero Trust Seats: ${timings.zeroTrustSeats}ms`);
+    } else {
+      console.log('⏭️ Zero Trust Seats disabled - skipping fetch');
+    }
+    
+    // Fetch Magic Transit if enabled
+    let magicTransitData = null;
+    console.log('Network Services config:', JSON.stringify(config?.networkServices));
+    const mtAccountIds = config?.networkServices?.magicTransit?.accountIds || [];
+    console.log(`Magic Transit enabled: ${config?.networkServices?.magicTransit?.enabled}, accountIds: ${JSON.stringify(mtAccountIds)}`);
+    if (config?.networkServices?.magicTransit?.enabled && mtAccountIds.length > 0) {
+      const mtStart = Date.now();
+      console.log(`🌐 Fetching Magic Transit for ${mtAccountIds.length} account(s)...`);
+      const mtConfig = config.networkServices.magicTransit;
+      
+      const mtPromises = mtAccountIds.map(accountId =>
+        fetchMagicBandwidthForAccount(apiKey, accountId, mtConfig, env, 'magicTransit')
+          .then(data => ({ accountId, data }))
+      );
+      
+      const mtResults = await Promise.allSettled(mtPromises);
+      console.log(`MT results: ${mtResults.length}, statuses: ${mtResults.map(r => r.status).join(',')}`);
+      mtResults.forEach((r, i) => {
+        if (r.status === 'fulfilled') {
+          console.log(`MT[${i}]: accountId=${r.value?.accountId}, hasData=${!!r.value?.data}`);
+        } else {
+          console.log(`MT[${i}] rejected: ${r.reason}`);
+        }
+      });
+      const mtData = mtResults
+        .filter(result => result.status === 'fulfilled' && result.value?.data)
+        .map(result => result.value);
+      console.log(`MT filtered: ${mtData.length} entries`);
+      
+      if (mtData.length > 0) {
+        // Merge timeSeries from all accounts (sum P95 values)
+        const timeSeriesMap = new Map();
+        mtData.forEach(accountEntry => {
+          if (accountEntry.data.timeSeries) {
+            accountEntry.data.timeSeries.forEach(entry => {
+              const existing = timeSeriesMap.get(entry.month);
+              if (existing) {
+                existing.p95Mbps += entry.p95Mbps || 0;
+              } else {
+                timeSeriesMap.set(entry.month, {
+                  month: entry.month,
+                  timestamp: entry.timestamp,
+                  p95Mbps: entry.p95Mbps || 0,
+                });
+              }
+            });
+          }
+        });
+
+        const mergedTimeSeries = Array.from(timeSeriesMap.values())
+          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+        magicTransitData = {
+          enabled: true,
+          threshold: mtConfig.threshold,
+          current: {
+            p95Mbps: mtData.reduce((sum, entry) => sum + entry.data.current.p95Mbps, 0),
+          },
+          previous: {
+            p95Mbps: mtData.reduce((sum, entry) => sum + entry.data.previous.p95Mbps, 0),
+          },
+          timeSeries: mergedTimeSeries,
+          perAccountData: mtData.map(entry => ({
+            accountId: entry.accountId,
+            current: entry.data.current,
+            previous: entry.data.previous,
+            timeSeries: entry.data.timeSeries,
+          })),
+        };
+        console.log(`Magic Transit: ${magicTransitData.current.p95Mbps} Mbps current, ${magicTransitData.previous.p95Mbps} Mbps previous`);
+      }
+      timings.magicTransit = Date.now() - mtStart;
+      console.log(`⏱️ Magic Transit: ${timings.magicTransit}ms`);
+    } else {
+      console.log('⏭️ Magic Transit disabled - skipping fetch');
+    }
+    
+    // Fetch Magic WAN if enabled
+    let magicWanData = null;
+    const mwAccountIds = config?.networkServices?.magicWan?.accountIds || [];
+    if (config?.networkServices?.magicWan?.enabled && mwAccountIds.length > 0) {
+      const mwStart = Date.now();
+      console.log(`🌐 Fetching Magic WAN for ${mwAccountIds.length} account(s)...`);
+      const mwConfig = config.networkServices.magicWan;
+      
+      const mwPromises = mwAccountIds.map(accountId =>
+        fetchMagicBandwidthForAccount(apiKey, accountId, mwConfig, env, 'magicWan')
+          .then(data => ({ accountId, data }))
+      );
+      
+      const mwResults = await Promise.allSettled(mwPromises);
+      const mwData = mwResults
+        .filter(result => result.status === 'fulfilled' && result.value?.data)
+        .map(result => result.value);
+      
+      if (mwData.length > 0) {
+        // Merge timeSeries from all accounts
+        const timeSeriesMap = new Map();
+        mwData.forEach(accountEntry => {
+          if (accountEntry.data.timeSeries) {
+            accountEntry.data.timeSeries.forEach(entry => {
+              const existing = timeSeriesMap.get(entry.month);
+              if (existing) {
+                existing.p95Mbps += entry.p95Mbps || 0;
+              } else {
+                timeSeriesMap.set(entry.month, {
+                  month: entry.month,
+                  timestamp: entry.timestamp,
+                  p95Mbps: entry.p95Mbps || 0,
+                });
+              }
+            });
+          }
+        });
+
+        const mergedTimeSeries = Array.from(timeSeriesMap.values())
+          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+        magicWanData = {
+          enabled: true,
+          threshold: mwConfig.threshold,
+          current: {
+            p95Mbps: mwData.reduce((sum, entry) => sum + entry.data.current.p95Mbps, 0),
+          },
+          previous: {
+            p95Mbps: mwData.reduce((sum, entry) => sum + entry.data.previous.p95Mbps, 0),
+          },
+          timeSeries: mergedTimeSeries,
+          perAccountData: mwData.map(entry => ({
+            accountId: entry.accountId,
+            current: entry.data.current,
+            previous: entry.data.previous,
+            timeSeries: entry.data.timeSeries,
+          })),
+        };
+        console.log(`Magic WAN: ${magicWanData.current.p95Mbps} Mbps current, ${magicWanData.previous.p95Mbps} Mbps previous`);
+      }
+      timings.magicWan = Date.now() - mwStart;
+      console.log(`⏱️ Magic WAN: ${timings.magicWan}ms`);
+    } else {
+      console.log('⏭️ Magic WAN disabled - skipping fetch');
+    }
+    
+    // Log timing summary
+    const totalTime = Date.now() - overallStart;
+    console.log(`\n📊 TIMING SUMMARY (Total: ${totalTime}ms):`);
+    Object.entries(timings).forEach(([key, ms]) => {
+      console.log(`   ${key}: ${ms}ms (${((ms/totalTime)*100).toFixed(1)}%)`);
+    });
     
     // Build response with only enabled metrics
     const response = {
@@ -618,6 +853,9 @@ async function getMetricsProgressive(request, env, corsHeaders) {
       ...(apiShieldData && { apiShield: apiShieldData }),
       ...(pageShieldData && { pageShield: pageShieldData }),
       ...(advancedRateLimitingData && { advancedRateLimiting: advancedRateLimitingData }),
+      ...(zeroTrustSeatsData && { zeroTrustSeats: zeroTrustSeatsData }),
+      ...(magicTransitData && { magicTransit: magicTransitData }),
+      ...(magicWanData && { magicWan: magicWanData }),
     };
     
     return new Response(
@@ -885,7 +1123,35 @@ async function fetchAccountMetrics(apiKey, accountId, env) {
     }`,
   };
 
-  // Make request to Cloudflare GraphQL API
+  // Separate query for TOTAL eyeball HTTP traffic (includes blocked + clean)
+  const totalTrafficQuery = {
+    operationName: 'GetEnterpriseZoneTotalTraffic',
+    variables: {
+      zoneIds: zoneIds,
+      filter: {
+        AND: [
+          { datetime_geq: currentMonthDatetimeStart },
+          { datetime_leq: currentMonthDatetimeEnd },
+          { requestSource: 'eyeball' }
+        ]
+      }
+    },
+    query: `query GetEnterpriseZoneTotalTraffic($zoneIds: [String!]!, $filter: ZoneHttpRequestsAdaptiveGroupsFilter_InputObject) {
+      viewer {
+        zones(filter: {zoneTag_in: $zoneIds}) {
+          zoneTag
+          totals: httpRequestsAdaptiveGroups(filter: $filter, limit: 1) {
+            count
+            sum {
+              edgeResponseBytes
+            }
+          }
+        }
+      }
+    }`,
+  };
+
+  // Make request to Cloudflare GraphQL API for clean/billable traffic
   const response = await fetch('https://api.cloudflare.com/client/v4/graphql', {
     method: 'POST',
     headers: {
@@ -901,6 +1167,34 @@ async function fetchAccountMetrics(apiKey, accountId, env) {
     throw new Error(`Failed to fetch metrics for account ${accountId}: ${JSON.stringify(data)}`);
   }
 
+  // Fetch TOTAL traffic in parallel (best-effort; UI treats this as vanity metric)
+  let totalTrafficByZone = {};
+  try {
+    const totalResponse = await fetch('https://api.cloudflare.com/client/v4/graphql', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(totalTrafficQuery),
+    });
+
+    const totalData = await totalResponse.json();
+    const totalZones = totalData.data?.viewer?.zones || [];
+
+    totalZones.forEach(zone => {
+      const totals = zone.totals?.[0];
+      const totalRequests = totals?.count || 0;
+      const totalBytes = totals?.sum?.edgeResponseBytes || 0;
+      totalTrafficByZone[zone.zoneTag] = {
+        totalRequests,
+        totalBytes,
+      };
+    });
+  } catch (e) {
+    console.error('Failed to fetch total HTTP traffic (vanity metric):', e);
+  }
+
   // Process and aggregate current month data from all Enterprise zones
   const zones = data.data?.viewer?.zones || [];
   
@@ -909,16 +1203,21 @@ async function fetchAccountMetrics(apiKey, accountId, env) {
   }
 
   // Aggregate current month stats across all Enterprise zones
-  // Now tracking only clean/billable traffic directly
+  // Now tracking only clean/billable traffic directly, plus vanity total/blocked metrics
   let currentMonthTotal = { 
-    requests: 0,  // Clean/billable requests only
-    bytes: 0,     // Clean/billable bytes only
+    requests: 0,        // Clean/billable requests only
+    bytes: 0,           // Clean/billable bytes only
     dnsQueries: 0,
     confidence: {
       requests: null,
       bytes: null,
       dnsQueries: null
-    }
+    },
+    // Vanity metrics used only for display in the HTTP/Data Transfer cards
+    totalRequests: 0,
+    blockedRequests: 0,
+    totalBytes: 0,
+    blockedBytes: 0,
   };
   
   // Create zone name lookup map
@@ -957,12 +1256,25 @@ async function fetchAccountMetrics(apiKey, accountId, env) {
   // Track per-zone metrics for primary/secondary classification
   const zoneMetrics = [];
   const SECONDARY_ZONE_THRESHOLD = 50 * (1024 ** 3); // 50GB in bytes
+  let hasCurrentTotalsForAccount = false;
   
   zones.forEach(zone => {
-    // Get aggregated totals (single result, no loop needed)
+    // Get aggregated CLEAN/BILLABLE totals (single result, no loop needed)
     const totals = zone.totals?.[0];
     const zoneRequests = totals?.count || 0;
     const zoneBytes = totals?.sum?.edgeResponseBytes || 0;
+
+    // Look up TOTAL eyeball traffic for this zone.
+    // If totalTrafficByZone is missing (e.g. vanity query failed),
+    // we leave total/blocked null rather than fabricating from billable.
+    const totalTraffic = totalTrafficByZone[zone.zoneTag];
+    const hasTotalTraffic = totalTraffic && typeof totalTraffic.totalRequests === 'number' && typeof totalTraffic.totalBytes === 'number';
+    const zoneTotalRequests = hasTotalTraffic ? totalTraffic.totalRequests : null;
+    const zoneTotalBytes = hasTotalTraffic ? totalTraffic.totalBytes : null;
+
+    // Derive BLOCKED as total - clean, clamp at 0 to avoid negatives from rounding
+    const zoneBlockedRequests = hasTotalTraffic ? Math.max(0, zoneTotalRequests - zoneRequests) : null;
+    const zoneBlockedBytes = hasTotalTraffic ? Math.max(0, zoneTotalBytes - zoneBytes) : null;
     
     // Collect confidence data
     const requestsConf = totals?.confidence?.count;
@@ -982,9 +1294,17 @@ async function fetchAccountMetrics(apiKey, accountId, env) {
       totalBytesConfidenceData.sampleSizes.push(bytesConf.sampleSize || 0);
     }
     
-    // Add to account totals (already filtered for clean/billable traffic)
+    // Add to account totals (clean/billable) and vanity metrics
     currentMonthTotal.requests += zoneRequests;
     currentMonthTotal.bytes += zoneBytes;
+
+    if (hasTotalTraffic) {
+      currentMonthTotal.totalRequests += zoneTotalRequests;
+      currentMonthTotal.totalBytes += zoneTotalBytes;
+      currentMonthTotal.blockedRequests += zoneBlockedRequests;
+      currentMonthTotal.blockedBytes += zoneBlockedBytes;
+      hasCurrentTotalsForAccount = true;
+    }
     
     // Classify zone as primary or secondary based on bandwidth
     const isPrimary = zoneBytes >= SECONDARY_ZONE_THRESHOLD;
@@ -998,6 +1318,16 @@ async function fetchAccountMetrics(apiKey, accountId, env) {
       isPrimary,
     });
   });
+  
+  // If we never saw TOTAL traffic for any zone in this account, treat
+  // vanity totals as unavailable so the UI hides the badge instead of
+  // showing 0 derived from missing data.
+  if (!hasCurrentTotalsForAccount) {
+    currentMonthTotal.totalRequests = null;
+    currentMonthTotal.totalBytes = null;
+    currentMonthTotal.blockedRequests = null;
+    currentMonthTotal.blockedBytes = null;
+  }
   
   // Calculate aggregated confidence for total requests and bytes
   if (totalRequestsConfidenceData.estimates.length > 0) {
@@ -1128,7 +1458,14 @@ async function fetchAccountMetrics(apiKey, accountId, env) {
   let previousMonthStats = { 
     requests: 0,  // Clean/billable requests only
     bytes: 0,     // Clean/billable bytes only
-    dnsQueries: 0
+    dnsQueries: 0,
+    // Vanity HTTP metrics for previous month (for display only).
+    // Use null so that older cached records (without these fields)
+    // fall back to billable values instead of forcing 0 totals.
+    totalRequests: null,
+    blockedRequests: null,
+    totalBytes: null,
+    blockedBytes: null,
   };
   
   if (cachedPreviousMonth) {
@@ -1142,6 +1479,7 @@ async function fetchAccountMetrics(apiKey, accountId, env) {
     const previousMonthDatetimeStart = previousMonthStart.toISOString();
     const previousMonthDatetimeEnd = previousMonthEnd.toISOString();
     
+    // Clean/billable HTTP traffic for previous month
     const previousMonthQuery = {
       operationName: 'GetPreviousMonthStats',
       variables: {
@@ -1174,6 +1512,34 @@ async function fetchAccountMetrics(apiKey, accountId, env) {
       }`,
     };
 
+    // TOTAL eyeball HTTP traffic for previous month (includes blocked + clean)
+    const previousMonthTotalTrafficQuery = {
+      operationName: 'GetPreviousMonthTotalTraffic',
+      variables: {
+        zoneIds: zoneIds,
+        filter: {
+          AND: [
+            { datetime_geq: previousMonthDatetimeStart },
+            { datetime_leq: previousMonthDatetimeEnd },
+            { requestSource: 'eyeball' }
+          ]
+        }
+      },
+      query: `query GetPreviousMonthTotalTraffic($zoneIds: [String!]!, $filter: ZoneHttpRequestsAdaptiveGroupsFilter_InputObject) {
+        viewer {
+          zones(filter: {zoneTag_in: $zoneIds}) {
+            zoneTag
+            totals: httpRequestsAdaptiveGroups(filter: $filter, limit: 1) {
+              count
+              sum {
+                edgeResponseBytes
+              }
+            }
+          }
+        }
+      }`,
+    };
+
     const prevResponse = await fetch('https://api.cloudflare.com/client/v4/graphql', {
       method: 'POST',
       headers: {
@@ -1185,20 +1551,64 @@ async function fetchAccountMetrics(apiKey, accountId, env) {
 
     const prevData = await prevResponse.json();
     const prevZones = prevData.data?.viewer?.zones || [];
+
+    // Fetch TOTAL previous-month traffic (best-effort)
+    let prevTotalTrafficByZone = {};
+    try {
+      const prevTotalResponse = await fetch('https://api.cloudflare.com/client/v4/graphql', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify(previousMonthTotalTrafficQuery),
+      });
+
+      const prevTotalData = await prevTotalResponse.json();
+      const prevTotalZones = prevTotalData.data?.viewer?.zones || [];
+
+      prevTotalZones.forEach(zone => {
+        const totals = zone.totals?.[0];
+        const totalRequests = totals?.count || 0;
+        const totalBytes = totals?.sum?.edgeResponseBytes || 0;
+        prevTotalTrafficByZone[zone.zoneTag] = {
+          totalRequests,
+          totalBytes,
+        };
+      });
+    } catch (e) {
+      console.error('Failed to fetch previous month total HTTP traffic (vanity metric):', e);
+    }
     
     // Track per-zone metrics for previous month
     const prevZoneMetrics = [];
     const SECONDARY_ZONE_THRESHOLD = 50 * (1024 ** 3); // 50GB in bytes
     
     prevZones.forEach(zone => {
-      // Get aggregated totals (single result, no loop needed)
+      // Get aggregated CLEAN/BILLABLE totals (single result, no loop needed)
       const totals = zone.totals?.[0];
       const zoneRequests = totals?.count || 0;
       const zoneBytes = totals?.sum?.edgeResponseBytes || 0;
-      
-      // Add to previous month totals (already filtered for clean/billable traffic)
+
+      // Look up TOTAL eyeball traffic for this zone
+      const totalTraffic = prevTotalTrafficByZone[zone.zoneTag];
+      const hasTotalTraffic = totalTraffic && typeof totalTraffic.totalRequests === 'number' && typeof totalTraffic.totalBytes === 'number';
+      const zoneTotalRequests = hasTotalTraffic ? totalTraffic.totalRequests : null;
+      const zoneTotalBytes = hasTotalTraffic ? totalTraffic.totalBytes : null;
+
+      // Derive BLOCKED as total - clean, clamp at 0
+      const zoneBlockedRequests = hasTotalTraffic ? Math.max(0, zoneTotalRequests - zoneRequests) : null;
+      const zoneBlockedBytes = hasTotalTraffic ? Math.max(0, zoneTotalBytes - zoneBytes) : null;
+
+      // Add to previous month totals (clean/billable and vanity)
       previousMonthStats.requests += zoneRequests;
       previousMonthStats.bytes += zoneBytes;
+      if (hasTotalTraffic) {
+        previousMonthStats.totalRequests += zoneTotalRequests;
+        previousMonthStats.totalBytes += zoneTotalBytes;
+        previousMonthStats.blockedRequests += zoneBlockedRequests;
+        previousMonthStats.blockedBytes += zoneBlockedBytes;
+      }
       
       // Classify zone as primary or secondary based on bandwidth
       const isPrimary = zoneBytes >= SECONDARY_ZONE_THRESHOLD;
@@ -1405,6 +1815,11 @@ async function fetchAccountMetrics(apiKey, accountId, env) {
       bytes: currentMonthTotal.bytes,        // Clean/billable bytes only
       dnsQueries: currentMonthTotal.dnsQueries,
       confidence: currentMonthTotal.confidence,
+      // Vanity HTTP metrics for display only
+      totalRequests: currentMonthTotal.totalRequests,
+      blockedRequests: currentMonthTotal.blockedRequests,
+      totalBytes: currentMonthTotal.totalBytes,
+      blockedBytes: currentMonthTotal.blockedBytes,
     },
     previous: previousMonthStats,
     timeSeries: timeSeriesData,
@@ -1452,12 +1867,22 @@ function aggregateAccountMetrics(accountMetrics) {
         requests: null,
         bytes: null,
         dnsQueries: null
-      }
+      },
+      // Vanity HTTP metrics used only for display in the HTTP/Data Transfer cards
+      totalRequests: null,
+      blockedRequests: null,
+      totalBytes: null,
+      blockedBytes: null,
     },
     previous: {
       requests: 0,
       bytes: 0,
       dnsQueries: 0,
+      // Vanity HTTP metrics for previous month
+      totalRequests: null,
+      blockedRequests: null,
+      totalBytes: null,
+      blockedBytes: null,
     },
     timeSeries: [],
     zoneBreakdown: {
@@ -1480,10 +1905,30 @@ function aggregateAccountMetrics(accountMetrics) {
     dnsQueries: { estimates: [], lowers: [], uppers: [], sampleSizes: [] }
   };
   
+  let hasCurrentTotals = false;
+  let hasPreviousTotals = false;
+
   accountMetrics.forEach(accountData => {
     aggregated.current.requests += accountData.current.requests || 0;
     aggregated.current.bytes += accountData.current.bytes || 0;
     aggregated.current.dnsQueries += accountData.current.dnsQueries || 0;
+    // Vanity HTTP metrics (only when real totals are present)
+    if (typeof accountData.current.totalRequests === 'number') {
+      aggregated.current.totalRequests = (aggregated.current.totalRequests || 0) + accountData.current.totalRequests;
+      hasCurrentTotals = true;
+    }
+    if (typeof accountData.current.blockedRequests === 'number') {
+      aggregated.current.blockedRequests = (aggregated.current.blockedRequests || 0) + accountData.current.blockedRequests;
+      hasCurrentTotals = true;
+    }
+    if (typeof accountData.current.totalBytes === 'number') {
+      aggregated.current.totalBytes = (aggregated.current.totalBytes || 0) + accountData.current.totalBytes;
+      hasCurrentTotals = true;
+    }
+    if (typeof accountData.current.blockedBytes === 'number') {
+      aggregated.current.blockedBytes = (aggregated.current.blockedBytes || 0) + accountData.current.blockedBytes;
+      hasCurrentTotals = true;
+    }
     
     // Collect confidence data from each account
     if (accountData.current.confidence) {
@@ -1576,7 +2021,37 @@ function aggregateAccountMetrics(accountMetrics) {
     aggregated.previous.requests += accountData.previous.requests || 0;
     aggregated.previous.bytes += accountData.previous.bytes || 0;
     aggregated.previous.dnsQueries += accountData.previous.dnsQueries || 0;
+    if (typeof accountData.previous.totalRequests === 'number') {
+      aggregated.previous.totalRequests = (aggregated.previous.totalRequests || 0) + accountData.previous.totalRequests;
+      hasPreviousTotals = true;
+    }
+    if (typeof accountData.previous.blockedRequests === 'number') {
+      aggregated.previous.blockedRequests = (aggregated.previous.blockedRequests || 0) + accountData.previous.blockedRequests;
+      hasPreviousTotals = true;
+    }
+    if (typeof accountData.previous.totalBytes === 'number') {
+      aggregated.previous.totalBytes = (aggregated.previous.totalBytes || 0) + accountData.previous.totalBytes;
+      hasPreviousTotals = true;
+    }
+    if (typeof accountData.previous.blockedBytes === 'number') {
+      aggregated.previous.blockedBytes = (aggregated.previous.blockedBytes || 0) + accountData.previous.blockedBytes;
+      hasPreviousTotals = true;
+    }
   });
+
+  // If no real totals were seen, keep them as null so the UI hides the badge
+  if (!hasCurrentTotals) {
+    aggregated.current.totalRequests = null;
+    aggregated.current.blockedRequests = null;
+    aggregated.current.totalBytes = null;
+    aggregated.current.blockedBytes = null;
+  }
+  if (!hasPreviousTotals) {
+    aggregated.previous.totalRequests = null;
+    aggregated.previous.blockedRequests = null;
+    aggregated.previous.totalBytes = null;
+    aggregated.previous.blockedBytes = null;
+  }
 
   // Aggregate zone breakdowns
   accountMetrics.forEach(accountData => {
@@ -1647,20 +2122,31 @@ async function getZones(request, env, corsHeaders) {
     });
   }
 
-  // Fetch zones from all accounts
+  // Fetch zones and account names from all accounts
   const allEnterpriseZones = [];
-  let totalZones = 0;
+  const accountNames = {}; // Map of accountId -> accountName
   
   for (const accountId of accountIds) {
     try {
+      // Fetch account name
+      const accountName = await fetchAccountName(apiKey, accountId);
+      accountNames[accountId] = accountName || accountId;
+      
+      // Fetch zones
       const zones = await fetchEnterpriseZones(apiKey, accountId);
       if (zones && zones.length > 0) {
-        allEnterpriseZones.push(...zones);
-        totalZones += zones.length;
+        // Add account info to each zone
+        zones.forEach(z => {
+          allEnterpriseZones.push({
+            ...z,
+            account: { id: accountId, name: accountNames[accountId] }
+          });
+        });
       }
     } catch (error) {
       console.error(`Error fetching zones for account ${accountId}:`, error);
-      // Continue with other accounts
+      // Still store account ID as fallback name
+      accountNames[accountId] = accountId;
     }
   }
 
@@ -1668,7 +2154,12 @@ async function getZones(request, env, corsHeaders) {
     JSON.stringify({
       total: allEnterpriseZones.length,
       enterprise: allEnterpriseZones.length,
-      zones: allEnterpriseZones.map(z => ({ id: z.id, name: z.name })),
+      zones: allEnterpriseZones.map(z => ({ 
+        id: z.id, 
+        name: z.name,
+        account: z.account 
+      })),
+      accounts: accountNames, // Include account names map for accounts without zones
     }),
     {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -2559,6 +3050,377 @@ async function getHistoricalBotManagementData(env, accountId) {
 }
 
 /**
+ * Fetch Zero Trust Seats for an account
+ * Returns current seat count (account-level metric, no zones involved)
+ */
+async function fetchZeroTrustSeatsForAccount(apiKey, accountId, seatsConfig, env) {
+  if (!seatsConfig || !seatsConfig.enabled) {
+    return null;
+  }
+
+  const now = new Date();
+  const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const previousMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const previousMonthKey = `${previousMonthStart.getFullYear()}-${String(previousMonthStart.getMonth() + 1).padStart(2, '0')}`;
+
+  // Fetch current seat count from Access Users API
+  let currentSeats = 0;
+  try {
+    const response = await fetch(
+      `https://api.cloudflare.com/client/v4/accounts/${accountId}/access/users?seat_type=any&per_page=1`,
+      {
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+
+    if (response.ok) {
+      const data = await response.json();
+      currentSeats = data.result_info?.total_count || 0;
+      console.log(`Zero Trust Seats for account ${accountId}: ${currentSeats}`);
+    } else {
+      console.error(`Failed to fetch Zero Trust seats for account ${accountId}: ${response.status}`);
+      return null;
+    }
+  } catch (error) {
+    console.error(`Error fetching Zero Trust seats for account ${accountId}:`, error);
+    return null;
+  }
+
+  // Get cached previous month data
+  const previousMonthCacheKey = `monthly-zt-seats:${accountId}:${previousMonthKey}`;
+  let previousSeats = 0;
+  
+  const cachedPreviousMonth = await env.CONFIG_KV.get(previousMonthCacheKey, 'json');
+  if (cachedPreviousMonth) {
+    previousSeats = cachedPreviousMonth.seats || 0;
+  }
+
+  // Cache current month snapshot at end of month (day >= 28)
+  if (now.getDate() >= 28) {
+    const currentMonthCacheKey = `monthly-zt-seats:${accountId}:${currentMonthKey}`;
+    const existingCurrentCache = await env.CONFIG_KV.get(currentMonthCacheKey, 'json');
+    if (!existingCurrentCache) {
+      try {
+        await env.CONFIG_KV.put(
+          currentMonthCacheKey,
+          JSON.stringify({ seats: currentSeats, cachedAt: Date.now() }),
+          { expirationTtl: 31536000 } // 1 year
+        );
+        console.log(`Cached Zero Trust seats snapshot for ${currentMonthKey}: ${currentSeats}`);
+      } catch (cacheError) {
+        console.error('Failed to cache Zero Trust seats snapshot:', cacheError);
+      }
+    }
+  }
+
+  // Load historical data for time series
+  const historicalData = await getHistoricalZeroTrustSeatsData(env, accountId);
+
+  // Build time series
+  const timeSeries = [
+    ...historicalData,
+    {
+      month: currentMonthKey,
+      timestamp: new Date(now.getFullYear(), now.getMonth(), 1).toISOString(),
+      seats: currentSeats,
+    }
+  ].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+  // Deduplicate by month (keep latest)
+  const timeSeriesMap = new Map();
+  timeSeries.forEach(entry => {
+    timeSeriesMap.set(entry.month, entry);
+  });
+  const deduplicatedTimeSeries = Array.from(timeSeriesMap.values())
+    .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+  return {
+    current: { seats: currentSeats },
+    previous: { seats: previousSeats },
+    timeSeries: deduplicatedTimeSeries,
+  };
+}
+
+/**
+ * Get historical Zero Trust seats data from KV
+ */
+async function getHistoricalZeroTrustSeatsData(env, accountId) {
+  const historicalData = [];
+  
+  try {
+    const listResult = await env.CONFIG_KV.list({ prefix: `monthly-zt-seats:${accountId}:` });
+    
+    for (const key of listResult.keys) {
+      const data = await env.CONFIG_KV.get(key.name, 'json');
+      if (data) {
+        const month = key.name.split(':')[2];
+        const [year, monthNum] = month.split('-');
+        const timestamp = new Date(parseInt(year), parseInt(monthNum) - 1, 1).toISOString();
+        
+        historicalData.push({
+          month,
+          timestamp,
+          seats: data.seats || 0,
+        });
+      }
+    }
+  } catch (error) {
+    console.error('Error loading historical Zero Trust seats data:', error);
+  }
+  
+  return historicalData;
+}
+
+/**
+ * Fetch Magic Transit/WAN bandwidth for an account using GraphQL
+ * Returns P95th bandwidth in Mbps (account-level metric)
+ * @param {string} serviceType - 'magicTransit' or 'magicWan'
+ */
+async function fetchMagicBandwidthForAccount(apiKey, accountId, serviceConfig, env, serviceType) {
+  if (!serviceConfig || !serviceConfig.enabled) {
+    return null;
+  }
+
+  const now = new Date();
+  const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const previousMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const previousMonthKey = `${previousMonthStart.getFullYear()}-${String(previousMonthStart.getMonth() + 1).padStart(2, '0')}`;
+
+  // Define time ranges for current and previous month
+  const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const previousMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59);
+  
+  // Round end time to last completed 5-minute interval for consistent P95 calculation
+  const currentMonthEnd = new Date(now);
+  currentMonthEnd.setSeconds(0, 0);
+  currentMonthEnd.setMinutes(Math.floor(currentMonthEnd.getMinutes() / 5) * 5);
+
+  // GraphQL query for Magic Transit tunnel traffic - aggregate bandwidth per 5-min interval
+  // Uses sum.bits to get total bits transferred, then divide by 300 to get bits/sec
+  const query = `
+    query GetTunnelBandwidth($accountTag: String!, $datetimeStart: Date!, $datetimeEnd: Date!) {
+      viewer {
+        accounts(filter: {accountTag: $accountTag}) {
+          magicTransitTunnelTrafficAdaptiveGroups(
+            limit: 10000,
+            filter: {
+              datetime_geq: $datetimeStart,
+              datetime_lt: $datetimeEnd
+            }
+          ) {
+            sum {
+              bits
+            }
+            dimensions {
+              datetimeFiveMinutes
+            }
+          }
+        }
+      }
+    }
+  `;
+
+  // Fetch current month data
+  let currentP95Mbps = 0;
+  try {
+    const response = await fetch('https://api.cloudflare.com/client/v4/graphql', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        query,
+        variables: {
+          accountTag: accountId,
+          datetimeStart: currentMonthStart.toISOString(),
+          datetimeEnd: currentMonthEnd.toISOString(),
+        },
+      }),
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      
+      // Log any GraphQL errors
+      if (data.errors) {
+        console.error(`${serviceType} GraphQL errors for account ${accountId}:`, JSON.stringify(data.errors));
+      }
+      
+      const tunnelData = data?.data?.viewer?.accounts?.[0]?.magicTransitTunnelTrafficAdaptiveGroups || [];
+      console.log(`${serviceType} received ${tunnelData.length} 5-min intervals for account ${accountId}`);
+      
+      if (tunnelData.length > 0) {
+        // Convert sum.bits to bits/sec for each 5-min interval (divide by 300 seconds)
+        // Then calculate P95 across all intervals
+        const bandwidthSamples = tunnelData
+          .map(entry => {
+            const totalBits = entry.sum?.bits || 0;
+            return totalBits / 300; // Convert to bits/sec (5 min = 300 sec)
+          })
+          .filter(rate => rate > 0)
+          .sort((a, b) => a - b);
+        
+        console.log(`${serviceType} has ${bandwidthSamples.length} non-zero bandwidth samples`);
+        
+        if (bandwidthSamples.length > 0) {
+          // P95: sort ascending, take the value at 95th percentile index
+          const p95Index = Math.floor(bandwidthSamples.length * 0.95);
+          const p95BitsPerSecond = bandwidthSamples[Math.min(p95Index, bandwidthSamples.length - 1)];
+          console.log(`${serviceType} P95 raw: ${p95BitsPerSecond.toFixed(0)} bits/sec`);
+          // Convert bits/sec to Mbps
+          currentP95Mbps = p95BitsPerSecond / 1000000;
+        }
+      }
+      console.log(`${serviceType} P95 bandwidth for account ${accountId}: ${currentP95Mbps.toFixed(4)} Mbps`);
+    } else {
+      const errorText = await response.text();
+      console.error(`Failed to fetch ${serviceType} bandwidth for account ${accountId}: ${response.status} - ${errorText}`);
+      return null;
+    }
+  } catch (error) {
+    console.error(`Error fetching ${serviceType} bandwidth for account ${accountId}:`, error);
+    return null;
+  }
+
+  // Get previous month data - first try cache, then fetch from API
+  const previousMonthCacheKey = `monthly-${serviceType}:${accountId}:${previousMonthKey}`;
+  let previousP95Mbps = 0;
+  
+  const cachedPreviousMonth = await env.CONFIG_KV.get(previousMonthCacheKey, 'json');
+  if (cachedPreviousMonth) {
+    previousP95Mbps = cachedPreviousMonth.p95Mbps || 0;
+    console.log(`${serviceType} previous month from cache: ${previousP95Mbps} Mbps`);
+  } else {
+    // No cache - fetch previous month from API
+    console.log(`${serviceType} fetching previous month from API for ${previousMonthKey}`);
+    try {
+      const prevResponse = await fetch('https://api.cloudflare.com/client/v4/graphql', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          query,
+          variables: {
+            accountTag: accountId,
+            datetimeStart: previousMonthStart.toISOString(),
+            datetimeEnd: previousMonthEnd.toISOString(),
+          },
+        }),
+      });
+
+      if (prevResponse.ok) {
+        const prevData = await prevResponse.json();
+        const prevTunnelData = prevData?.data?.viewer?.accounts?.[0]?.magicTransitTunnelTrafficAdaptiveGroups || [];
+        
+        if (prevTunnelData.length > 0) {
+          const prevBandwidthSamples = prevTunnelData
+            .map(entry => (entry.sum?.bits || 0) / 300)
+            .filter(rate => rate > 0)
+            .sort((a, b) => a - b);
+          
+          if (prevBandwidthSamples.length > 0) {
+            const p95Index = Math.floor(prevBandwidthSamples.length * 0.95);
+            const p95BitsPerSecond = prevBandwidthSamples[Math.min(p95Index, prevBandwidthSamples.length - 1)];
+            previousP95Mbps = p95BitsPerSecond / 1000000;
+          }
+        }
+        console.log(`${serviceType} previous month from API: ${previousP95Mbps.toFixed(4)} Mbps (${prevTunnelData.length} intervals)`);
+        
+        // Cache the fetched previous month data
+        await env.CONFIG_KV.put(
+          previousMonthCacheKey,
+          JSON.stringify({ p95Mbps: previousP95Mbps, cachedAt: Date.now() }),
+          { expirationTtl: 31536000 }
+        );
+      }
+    } catch (prevError) {
+      console.error(`${serviceType} failed to fetch previous month:`, prevError);
+    }
+  }
+
+  // Cache current month snapshot at end of month (day >= 28)
+  if (now.getDate() >= 28) {
+    const currentMonthCacheKey = `monthly-${serviceType}:${accountId}:${currentMonthKey}`;
+    const existingCurrentCache = await env.CONFIG_KV.get(currentMonthCacheKey, 'json');
+    if (!existingCurrentCache) {
+      try {
+        await env.CONFIG_KV.put(
+          currentMonthCacheKey,
+          JSON.stringify({ p95Mbps: currentP95Mbps, cachedAt: Date.now() }),
+          { expirationTtl: 31536000 } // 1 year
+        );
+        console.log(`Cached ${serviceType} bandwidth snapshot for ${currentMonthKey}: ${currentP95Mbps} Mbps`);
+      } catch (cacheError) {
+        console.error(`Failed to cache ${serviceType} bandwidth snapshot:`, cacheError);
+      }
+    }
+  }
+
+  // Load historical data for time series
+  const historicalData = await getHistoricalMagicBandwidthData(env, accountId, serviceType);
+
+  // Build time series
+  const timeSeries = [
+    ...historicalData,
+    {
+      month: currentMonthKey,
+      timestamp: new Date(now.getFullYear(), now.getMonth(), 1).toISOString(),
+      p95Mbps: currentP95Mbps,
+    }
+  ].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+  // Deduplicate by month (keep latest)
+  const timeSeriesMap = new Map();
+  timeSeries.forEach(entry => {
+    timeSeriesMap.set(entry.month, entry);
+  });
+  const deduplicatedTimeSeries = Array.from(timeSeriesMap.values())
+    .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+  return {
+    current: { p95Mbps: currentP95Mbps },
+    previous: { p95Mbps: previousP95Mbps },
+    timeSeries: deduplicatedTimeSeries,
+  };
+}
+
+/**
+ * Get historical Magic Transit/WAN bandwidth data from KV
+ */
+async function getHistoricalMagicBandwidthData(env, accountId, serviceType) {
+  const historicalData = [];
+  
+  try {
+    const listResult = await env.CONFIG_KV.list({ prefix: `monthly-${serviceType}:${accountId}:` });
+    
+    for (const key of listResult.keys) {
+      const data = await env.CONFIG_KV.get(key.name, 'json');
+      if (data) {
+        const month = key.name.split(':')[2];
+        const [year, monthNum] = month.split('-');
+        const timestamp = new Date(parseInt(year), parseInt(monthNum) - 1, 1).toISOString();
+        
+        historicalData.push({
+          month,
+          timestamp,
+          p95Mbps: data.p95Mbps || 0,
+        });
+      }
+    }
+  } catch (error) {
+    console.error(`Error loading historical ${serviceType} bandwidth data:`, error);
+  }
+  
+  return historicalData;
+}
+
+/**
  * Calculate add-on metrics from existing zone data (API Shield, Page Shield, Advanced Rate Limiting)
  * These add-ons use HTTP request data we already have - just filter by configured zones!
  */
@@ -3031,22 +3893,39 @@ async function preWarmCache(env) {
         console.log('Pre-warm: Failed to fetch core metrics from any account');
       }
 
-      // Fetch zones list (needed for instant display)
-      const zonesPromises = accountIds.map(accountId =>
-        fetchEnterpriseZones(apiKey, accountId)
-      );
+      // Fetch zones list and account names (needed for instant display)
+      const allZones = [];
+      const accountNames = {};
       
-      const zonesResults = await Promise.allSettled(zonesPromises);
-      const allZones = zonesResults
-        .filter(result => result.status === 'fulfilled')
-        .flatMap(result => result.value);
+      for (const accountId of accountIds) {
+        try {
+          // Fetch account name
+          const accountName = await fetchAccountName(apiKey, accountId);
+          accountNames[accountId] = accountName || accountId;
+          
+          // Fetch zones
+          const zones = await fetchEnterpriseZones(apiKey, accountId);
+          if (zones && zones.length > 0) {
+            zones.forEach(z => {
+              allZones.push({
+                ...z,
+                account: { id: accountId, name: accountNames[accountId] }
+              });
+            });
+          }
+        } catch (error) {
+          console.error(`Pre-warm: Error fetching zones for account ${accountId}:`, error);
+          accountNames[accountId] = accountId;
+        }
+      }
       
       zonesCount = allZones.length;
       zonesData = {
-        zones: allZones,
+        zones: allZones.map(z => ({ id: z.id, name: z.name, account: z.account })),
+        accounts: accountNames,
         enterprise: zonesCount
       };
-      console.log(`Pre-warm: ${zonesCount} zones found and cached`);
+      console.log(`Pre-warm: ${zonesCount} zones, ${Object.keys(accountNames).length} accounts cached`);
     } else {
       console.log('Pre-warm: App Services Core disabled - skipping fetch');
     }
@@ -3321,6 +4200,193 @@ async function preWarmCache(env) {
       console.log('Pre-warm: Advanced Rate Limiting disabled - skipping calculation');
     }
     
+    // Fetch Zero Trust Seats if enabled
+    let zeroTrustSeatsData = null;
+    const ztSeatsAccountIds = config?.zeroTrust?.seats?.accountIds || [];
+    if (config?.zeroTrust?.seats?.enabled && ztSeatsAccountIds.length > 0) {
+      console.log(`Pre-warm: Fetching Zero Trust Seats for ${ztSeatsAccountIds.length} account(s)...`);
+      const seatsConfig = config.zeroTrust.seats;
+      
+      const seatsPromises = ztSeatsAccountIds.map(accountId =>
+        fetchZeroTrustSeatsForAccount(apiKey, accountId, seatsConfig, env)
+          .then(data => ({ accountId, data }))
+      );
+      
+      const seatsResults = await Promise.allSettled(seatsPromises);
+      const seatsData = seatsResults
+        .filter(result => result.status === 'fulfilled' && result.value?.data)
+        .map(result => result.value);
+      
+      if (seatsData.length > 0) {
+        // Merge timeSeries from all accounts
+        const timeSeriesMap = new Map();
+        seatsData.forEach(accountEntry => {
+          if (accountEntry.data.timeSeries) {
+            accountEntry.data.timeSeries.forEach(entry => {
+              const existing = timeSeriesMap.get(entry.month);
+              if (existing) {
+                existing.seats += entry.seats || 0;
+              } else {
+                timeSeriesMap.set(entry.month, {
+                  month: entry.month,
+                  timestamp: entry.timestamp,
+                  seats: entry.seats || 0,
+                });
+              }
+            });
+          }
+        });
+
+        const mergedTimeSeries = Array.from(timeSeriesMap.values())
+          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+        zeroTrustSeatsData = {
+          enabled: true,
+          threshold: seatsConfig.threshold,
+          current: {
+            seats: seatsData.reduce((sum, entry) => sum + entry.data.current.seats, 0),
+          },
+          previous: {
+            seats: seatsData.reduce((sum, entry) => sum + entry.data.previous.seats, 0),
+          },
+          timeSeries: mergedTimeSeries,
+          perAccountData: seatsData.map(entry => ({
+            accountId: entry.accountId,
+            current: entry.data.current,
+            previous: entry.data.previous,
+            timeSeries: entry.data.timeSeries,
+          })),
+        };
+        console.log(`Pre-warm: Zero Trust Seats fetched (${zeroTrustSeatsData.current.seats} current, ${zeroTrustSeatsData.previous.seats} previous)`);
+      }
+    } else {
+      console.log('Pre-warm: Zero Trust Seats disabled - skipping fetch');
+    }
+    
+    // Fetch Magic Transit if enabled
+    let magicTransitData = null;
+    const mtAccountIds = config?.networkServices?.magicTransit?.accountIds || [];
+    if (config?.networkServices?.magicTransit?.enabled && mtAccountIds.length > 0) {
+      console.log(`Pre-warm: Fetching Magic Transit for ${mtAccountIds.length} account(s)...`);
+      const mtConfig = config.networkServices.magicTransit;
+      
+      const mtPromises = mtAccountIds.map(accountId =>
+        fetchMagicBandwidthForAccount(apiKey, accountId, mtConfig, env, 'magicTransit')
+          .then(data => ({ accountId, data }))
+      );
+      
+      const mtResults = await Promise.allSettled(mtPromises);
+      const mtData = mtResults
+        .filter(result => result.status === 'fulfilled' && result.value?.data)
+        .map(result => result.value);
+      
+      if (mtData.length > 0) {
+        const timeSeriesMap = new Map();
+        mtData.forEach(accountEntry => {
+          if (accountEntry.data.timeSeries) {
+            accountEntry.data.timeSeries.forEach(entry => {
+              const existing = timeSeriesMap.get(entry.month);
+              if (existing) {
+                existing.p95Mbps += entry.p95Mbps || 0;
+              } else {
+                timeSeriesMap.set(entry.month, {
+                  month: entry.month,
+                  timestamp: entry.timestamp,
+                  p95Mbps: entry.p95Mbps || 0,
+                });
+              }
+            });
+          }
+        });
+
+        const mergedTimeSeries = Array.from(timeSeriesMap.values())
+          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+        magicTransitData = {
+          enabled: true,
+          threshold: mtConfig.threshold,
+          current: {
+            p95Mbps: mtData.reduce((sum, entry) => sum + entry.data.current.p95Mbps, 0),
+          },
+          previous: {
+            p95Mbps: mtData.reduce((sum, entry) => sum + entry.data.previous.p95Mbps, 0),
+          },
+          timeSeries: mergedTimeSeries,
+          perAccountData: mtData.map(entry => ({
+            accountId: entry.accountId,
+            current: entry.data.current,
+            previous: entry.data.previous,
+            timeSeries: entry.data.timeSeries,
+          })),
+        };
+        console.log(`Pre-warm: Magic Transit fetched (${magicTransitData.current.p95Mbps} Mbps current)`);
+      }
+    } else {
+      console.log('Pre-warm: Magic Transit disabled - skipping fetch');
+    }
+    
+    // Fetch Magic WAN if enabled
+    let magicWanData = null;
+    const mwAccountIds = config?.networkServices?.magicWan?.accountIds || [];
+    if (config?.networkServices?.magicWan?.enabled && mwAccountIds.length > 0) {
+      console.log(`Pre-warm: Fetching Magic WAN for ${mwAccountIds.length} account(s)...`);
+      const mwConfig = config.networkServices.magicWan;
+      
+      const mwPromises = mwAccountIds.map(accountId =>
+        fetchMagicBandwidthForAccount(apiKey, accountId, mwConfig, env, 'magicWan')
+          .then(data => ({ accountId, data }))
+      );
+      
+      const mwResults = await Promise.allSettled(mwPromises);
+      const mwData = mwResults
+        .filter(result => result.status === 'fulfilled' && result.value?.data)
+        .map(result => result.value);
+      
+      if (mwData.length > 0) {
+        const timeSeriesMap = new Map();
+        mwData.forEach(accountEntry => {
+          if (accountEntry.data.timeSeries) {
+            accountEntry.data.timeSeries.forEach(entry => {
+              const existing = timeSeriesMap.get(entry.month);
+              if (existing) {
+                existing.p95Mbps += entry.p95Mbps || 0;
+              } else {
+                timeSeriesMap.set(entry.month, {
+                  month: entry.month,
+                  timestamp: entry.timestamp,
+                  p95Mbps: entry.p95Mbps || 0,
+                });
+              }
+            });
+          }
+        });
+
+        const mergedTimeSeries = Array.from(timeSeriesMap.values())
+          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+        magicWanData = {
+          enabled: true,
+          threshold: mwConfig.threshold,
+          current: {
+            p95Mbps: mwData.reduce((sum, entry) => sum + entry.data.current.p95Mbps, 0),
+          },
+          previous: {
+            p95Mbps: mwData.reduce((sum, entry) => sum + entry.data.previous.p95Mbps, 0),
+          },
+          timeSeries: mergedTimeSeries,
+          perAccountData: mwData.map(entry => ({
+            accountId: entry.accountId,
+            current: entry.data.current,
+            previous: entry.data.previous,
+            timeSeries: entry.data.timeSeries,
+          })),
+        };
+        console.log(`Pre-warm: Magic WAN fetched (${magicWanData.current.p95Mbps} Mbps current)`);
+      }
+    } else {
+      console.log('Pre-warm: Magic WAN disabled - skipping fetch');
+    }
+    
     // Store in cache with timestamp (only enabled metrics)
     const cacheKey = `pre-warmed:${accountIds.join(',')}`;
     const cacheData = {
@@ -3333,6 +4399,9 @@ async function preWarmCache(env) {
         ...(apiShieldData && { apiShield: apiShieldData }),
         ...(pageShieldData && { pageShield: pageShieldData }),
         ...(advancedRateLimitingData && { advancedRateLimiting: advancedRateLimitingData }),
+        ...(zeroTrustSeatsData && { zeroTrustSeats: zeroTrustSeatsData }),
+        ...(magicTransitData && { magicTransit: magicTransitData }),
+        ...(magicWanData && { magicWan: magicWanData }),
       },
     };
 
