@@ -3163,10 +3163,10 @@ async function fetchMagicBandwidthForAccount(apiKey, accountId, serviceConfig, e
   }
 
   // GraphQL query for Magic Transit tunnel traffic
-  // Uses avg.bitRateFiveMinutes which returns bits/sec directly
-  // Filter by direction: ingress for Magic Transit (billing uses ingress only)
-  // For Magic WAN, billing uses max(ingress, egress) - we'll query egress for WAN
-  const direction = serviceType === 'magicTransit' ? 'ingress' : 'egress';
+  // Uses avg.bitRateFiveMinutes which is already in bits/sec (NOT total bits)
+  // Filter by direction: ingress for Magic Transit
+  // For Magic WAN, billing uses max(ingress, egress) - we'll query both and use highest P95
+  const directions = serviceType === 'magicTransit' ? ['ingress'] : ['ingress', 'egress'];
   const query = `
     query GetTunnelBandwidth($accountTag: String!, $datetimeStart: Date!, $datetimeEnd: Date!, $direction: String!) {
       viewer {
@@ -3194,8 +3194,8 @@ async function fetchMagicBandwidthForAccount(apiKey, accountId, serviceConfig, e
 
   // Fetch current month data - use short-term cache to avoid API inconsistency
   let currentP95Mbps = 0;
-  // v4 cache key - reverted to data intervals only for P95
-  const currentMonthCacheKey = `current-v4-${serviceType}:${accountId}:${currentMonthKey}:${currentMonthEnd.getHours()}`;
+  // v6 cache key - fixed: bitRateFiveMinutes is already bps (no /300), Magic WAN uses max(ingress, egress)
+  const currentMonthCacheKey = `current-v6-${serviceType}:${accountId}:${currentMonthKey}:${currentMonthEnd.getHours()}`;
   const cachedCurrentMonth = await env.CONFIG_KV.get(currentMonthCacheKey, 'json');
   
   if (cachedCurrentMonth && (Date.now() - cachedCurrentMonth.cachedAt) < 5 * 60 * 1000) {
@@ -3203,103 +3203,111 @@ async function fetchMagicBandwidthForAccount(apiKey, accountId, serviceConfig, e
     currentP95Mbps = cachedCurrentMonth.p95Mbps;
     console.log(`${serviceType} current month from cache: ${currentP95Mbps.toFixed(6)} Mbps (age: ${Math.round((Date.now() - cachedCurrentMonth.cachedAt) / 1000)}s)`);
   } else {
-    // Fetch fresh data from API
+    // Fetch fresh data from API - query all directions and use highest P95
     try {
-      const response = await fetch('https://api.cloudflare.com/client/v4/graphql', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        query,
-        variables: {
-          accountTag: accountId,
-          datetimeStart: currentMonthStart.toISOString(),
-          datetimeEnd: currentMonthEnd.toISOString(),
-          direction: direction,
-        },
-      }),
-    });
-
-    if (response.ok) {
-      const data = await response.json();
+      let bestP95Mbps = 0;
+      let bestDirection = '';
+      let bestIntervalCount = 0;
       
-      // Log any GraphQL errors
-      if (data.errors) {
-        console.error(`${serviceType} GraphQL errors for account ${accountId}:`, JSON.stringify(data.errors));
-      }
-      
-      const tunnelData = data?.data?.viewer?.accounts?.[0]?.magicTransitTunnelTrafficAdaptiveGroups || [];
-      console.log(`${serviceType} (${direction}) received ${tunnelData.length} intervals for account ${accountId}`);
-      
-      // Debug: show unique tunnels and sample values
-      const tunnelNames = [...new Set(tunnelData.map(e => e.dimensions?.tunnelName))];
-      console.log(`${serviceType} tunnels: ${tunnelNames.join(', ')}`);
-      if (tunnelData.length > 0 && tunnelData.length <= 5) {
-        tunnelData.forEach((e, i) => {
-          console.log(`  [${i}] tunnel=${e.dimensions?.tunnelName}, time=${e.dimensions?.datetimeFiveMinutes}, bitRate=${e.avg?.bitRateFiveMinutes}`);
+      for (const direction of directions) {
+        const response = await fetch('https://api.cloudflare.com/client/v4/graphql', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${apiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            query,
+            variables: {
+              accountTag: accountId,
+              datetimeStart: currentMonthStart.toISOString(),
+              datetimeEnd: currentMonthEnd.toISOString(),
+              direction: direction,
+            },
+          }),
         });
+
+        if (response.ok) {
+          const data = await response.json();
+          
+          if (data.errors) {
+            console.error(`${serviceType} GraphQL errors for account ${accountId}:`, JSON.stringify(data.errors));
+          }
+          
+          const tunnelData = data?.data?.viewer?.accounts?.[0]?.magicTransitTunnelTrafficAdaptiveGroups || [];
+          console.log(`${serviceType} (${direction}) received ${tunnelData.length} intervals for account ${accountId}`);
+          
+          const tunnelNames = [...new Set(tunnelData.map(e => e.dimensions?.tunnelName))];
+          console.log(`${serviceType} ${direction} tunnels: ${tunnelNames.join(', ')}`);
+          
+          // Group by time interval and sum across tunnels
+          const intervalMap = new Map();
+          tunnelData.forEach(entry => {
+            const time = entry.dimensions?.datetimeFiveMinutes;
+            // bitRateFiveMinutes is already in bits/sec (NOT total bits - no need to divide by 300)
+            const bitRate = entry.avg?.bitRateFiveMinutes || 0;
+            intervalMap.set(time, (intervalMap.get(time) || 0) + bitRate);
+          });
+          
+          // Calculate total possible intervals and generate all timestamps (WITH FILL approach)
+          const totalIntervals = Math.floor((currentMonthEnd.getTime() - currentMonthStart.getTime()) / (5 * 60 * 1000));
+          
+          // Generate all 5-minute intervals and fill with data or zeros
+          const bandwidthSamples = [];
+          for (let i = 0; i < totalIntervals; i++) {
+            const intervalTime = new Date(currentMonthStart.getTime() + i * 5 * 60 * 1000)
+              .toISOString()
+              .replace('.000Z', 'Z');
+            const bps = intervalMap.get(intervalTime) || 0;
+            bandwidthSamples.push(bps); // Already in bits/sec
+          }
+          bandwidthSamples.sort((a, b) => a - b);
+          
+          const nonZeroCount = bandwidthSamples.filter(bps => bps > 0).length;
+          const maxRate = bandwidthSamples.length > 0 ? Math.max(...bandwidthSamples) : 0;
+          console.log(`${serviceType} ${direction}: ${tunnelNames.length} tunnels, ${nonZeroCount}/${totalIntervals} intervals with data, max=${maxRate.toFixed(0)} bps`);
+          
+          // P95: 95th percentile from ALL intervals (including zeros)
+          const p95Index = Math.floor(bandwidthSamples.length * 0.95);
+          const p95BitsPerSecond = bandwidthSamples.length > 0 
+            ? bandwidthSamples[Math.min(p95Index, bandwidthSamples.length - 1)]
+            : 0;
+          const p95Mbps = p95BitsPerSecond / 1000000;
+          console.log(`${serviceType} ${direction} P95: ${p95BitsPerSecond.toFixed(2)} bps = ${p95Mbps.toFixed(6)} Mbps`);
+          
+          // Use highest P95 across directions (for Magic WAN)
+          if (p95Mbps > bestP95Mbps) {
+            bestP95Mbps = p95Mbps;
+            bestDirection = direction;
+            bestIntervalCount = nonZeroCount;
+          }
+        } else {
+          const errorText = await response.text();
+          console.error(`Failed to fetch ${serviceType} ${direction} for account ${accountId}: ${response.status} - ${errorText}`);
+        }
       }
       
-      // Group by time interval and sum across tunnels (billing sums all tunnels per interval)
-      const intervalMap = new Map();
-      tunnelData.forEach(entry => {
-        const time = entry.dimensions?.datetimeFiveMinutes;
-        const bitRate = entry.avg?.bitRateFiveMinutes || 0;
-        intervalMap.set(time, (intervalMap.get(time) || 0) + bitRate);
-      });
+      currentP95Mbps = bestP95Mbps;
+      console.log(`${serviceType} FINAL P95: ${currentP95Mbps.toFixed(6)} Mbps (using ${bestDirection})`);
       
-      // Calculate total possible intervals for context
-      const totalIntervals = Math.floor((currentMonthEnd.getTime() - currentMonthStart.getTime()) / (5 * 60 * 1000));
-      
-      // Convert to bits/sec (divide by 300) and keep only data intervals for P95
-      // Internal billing uses WITH FILL for completeness but P95 is from actual traffic intervals
-      const bandwidthSamples = Array.from(intervalMap.values())
-        .map(totalBits => totalBits / 300)
-        .filter(bps => bps > 0)
-        .sort((a, b) => a - b);
-      
-      // Debug info
-      const nonZeroCount = bandwidthSamples.length;
-      const maxRate = bandwidthSamples.length > 0 ? Math.max(...bandwidthSamples) : 0;
-      console.log(`${serviceType} ${tunnelNames.length} tunnels, ${nonZeroCount}/${totalIntervals} intervals with data, max=${maxRate.toFixed(0)} bps`);
-      
-      // P95: 95th percentile from data intervals only
-      const p95Index = Math.floor(bandwidthSamples.length * 0.95);
-      const p95BitsPerSecond = bandwidthSamples.length > 0 
-        ? bandwidthSamples[Math.min(p95Index, bandwidthSamples.length - 1)]
-        : 0;
-      console.log(`${serviceType} P95 index: ${p95Index}/${bandwidthSamples.length}, P95: ${p95BitsPerSecond.toFixed(2)} bits/sec`);
-      
-      // Convert bits/sec to Mbps
-      currentP95Mbps = p95BitsPerSecond / 1000000;
-      console.log(`${serviceType} P95 bandwidth for account ${accountId}: ${currentP95Mbps.toFixed(6)} Mbps`);
-      
-      // Only update cache if we got more data intervals than before (API can return inconsistent data)
+      // Cache the result
       const shouldUpdateCache = !cachedCurrentMonth || 
-        nonZeroCount > (cachedCurrentMonth.intervalCount || 0) ||
-        (Date.now() - cachedCurrentMonth.cachedAt) > 15 * 60 * 1000; // Force update after 15 min
+        bestIntervalCount > (cachedCurrentMonth.intervalCount || 0) ||
+        (Date.now() - cachedCurrentMonth.cachedAt) > 15 * 60 * 1000;
       
-      if (shouldUpdateCache) {
+      if (shouldUpdateCache && bestIntervalCount > 0) {
         await env.CONFIG_KV.put(
           currentMonthCacheKey,
-          JSON.stringify({ p95Mbps: currentP95Mbps, intervalCount: nonZeroCount, cachedAt: Date.now() }),
+          JSON.stringify({ p95Mbps: currentP95Mbps, intervalCount: bestIntervalCount, cachedAt: Date.now() }),
           { expirationTtl: 3600 }
         );
-        console.log(`${serviceType} cached new value: ${currentP95Mbps.toFixed(6)} Mbps (${nonZeroCount} data intervals)`);
-      } else {
-        // Use cached value if it had more intervals
+        console.log(`${serviceType} cached: ${currentP95Mbps.toFixed(6)} Mbps (${bestIntervalCount} intervals, ${bestDirection})`);
+      } else if (cachedCurrentMonth) {
         currentP95Mbps = cachedCurrentMonth.p95Mbps;
-        console.log(`${serviceType} keeping cached value: ${currentP95Mbps.toFixed(6)} Mbps (had ${cachedCurrentMonth.intervalCount} intervals vs ${nonZeroCount})`);
+        console.log(`${serviceType} keeping cached: ${currentP95Mbps.toFixed(6)} Mbps`);
       }
-    } else {
-      const errorText = await response.text();
-      console.error(`Failed to fetch ${serviceType} bandwidth for account ${accountId}: ${response.status} - ${errorText}`);
-      return null;
-    }
-    } catch (error) {
-      console.error(`Error fetching ${serviceType} bandwidth for account ${accountId}:`, error);
+    } catch (fetchError) {
+      console.error(`${serviceType} fetch error for account ${accountId}:`, fetchError);
       return null;
     }
   }
