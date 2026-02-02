@@ -28,6 +28,7 @@ dist-ssr
 .wrangler
 .dev.vars
 wrangler.toml.backup
+wrangler.dev.toml
 
 # Environment variables
 .env
@@ -42,3 +43,4 @@ build/
 # Misc
 .cache/
 .temp/
+SKU_IMPLEMENTATION_GUIDE.md
