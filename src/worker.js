@@ -3135,6 +3135,141 @@ async function getHistoricalZeroTrustSeatsData(env, accountId) {
 }
 
 /**
+ * Check if an IP address is private (RFC1918)
+ */
+function isPrivateIP(ip) {
+  if (!ip) return false;
+  // 10.0.0.0/8
+  if (ip.startsWith('10.')) return true;
+  // 192.168.0.0/16
+  if (ip.startsWith('192.168.')) return true;
+  // 172.16.0.0/12 (172.16.x.x - 172.31.x.x)
+  if (ip.startsWith('172.')) {
+    const secondOctet = parseInt(ip.split('.')[1], 10);
+    if (secondOctet >= 16 && secondOctet <= 31) return true;
+  }
+  return false;
+}
+
+/**
+ * Classify tunnels as Magic Transit or Magic WAN based on IP addresses
+ * Returns a Map of tunnelName -> 'magicTransit' | 'magicWan'
+ * Logic: If any IP (source or dest) is private -> Magic WAN, else -> Magic Transit
+ */
+async function classifyTunnelsByIP(apiKey, accountId, env) {
+  const cacheKey = `tunnel-classification:${accountId}`;
+  
+  // Check cache first (valid for 24 hours)
+  const cached = await env.CONFIG_KV.get(cacheKey, 'json');
+  if (cached && (Date.now() - cached.cachedAt) < 24 * 60 * 60 * 1000) {
+    console.log(`Tunnel classification from cache for ${accountId}: ${Object.keys(cached.tunnels).length} tunnels`);
+    return new Map(Object.entries(cached.tunnels));
+  }
+  
+  // Query recent IP data to classify tunnels
+  const now = new Date();
+  const startDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000); // Last 7 days
+  
+  const query = `
+    query ClassifyTunnels($accountTag: String!, $datetimeStart: Date!, $datetimeEnd: Date!) {
+      viewer {
+        accounts(filter: {accountTag: $accountTag}) {
+          magicTransitNetworkAnalyticsAdaptiveGroups(
+            limit: 1000,
+            filter: {
+              datetime_geq: $datetimeStart,
+              datetime_lt: $datetimeEnd
+            }
+          ) {
+            dimensions {
+              ipSourceAddress
+              ipDestinationAddress
+              ingressTunnelName
+              egressTunnelName
+            }
+          }
+        }
+      }
+    }
+  `;
+  
+  try {
+    const response = await fetch('https://api.cloudflare.com/client/v4/graphql', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        query,
+        variables: {
+          accountTag: accountId,
+          datetimeStart: startDate.toISOString(),
+          datetimeEnd: now.toISOString(),
+        },
+      }),
+    });
+    
+    if (!response.ok) {
+      console.error(`Failed to fetch tunnel classification data: ${response.status}`);
+      return new Map();
+    }
+    
+    const data = await response.json();
+    const entries = data?.data?.viewer?.accounts?.[0]?.magicTransitNetworkAnalyticsAdaptiveGroups || [];
+    
+    // Track which tunnels have private IPs
+    const tunnelHasPrivateIP = new Map();
+    
+    for (const entry of entries) {
+      const srcIP = entry.dimensions?.ipSourceAddress;
+      const dstIP = entry.dimensions?.ipDestinationAddress;
+      const ingressTunnel = entry.dimensions?.ingressTunnelName;
+      const egressTunnel = entry.dimensions?.egressTunnelName;
+      
+      const hasPrivate = isPrivateIP(srcIP) || isPrivateIP(dstIP);
+      
+      // Mark tunnels that have any private IP traffic as Magic WAN
+      if (ingressTunnel) {
+        if (hasPrivate || !tunnelHasPrivateIP.has(ingressTunnel)) {
+          tunnelHasPrivateIP.set(ingressTunnel, tunnelHasPrivateIP.get(ingressTunnel) || hasPrivate);
+        }
+      }
+      if (egressTunnel) {
+        if (hasPrivate || !tunnelHasPrivateIP.has(egressTunnel)) {
+          tunnelHasPrivateIP.set(egressTunnel, tunnelHasPrivateIP.get(egressTunnel) || hasPrivate);
+        }
+      }
+    }
+    
+    // Convert to tunnel -> serviceType map
+    const tunnelClassification = new Map();
+    for (const [tunnelName, hasPrivate] of tunnelHasPrivateIP) {
+      if (tunnelName) { // Skip empty tunnel names
+        tunnelClassification.set(tunnelName, hasPrivate ? 'magicWan' : 'magicTransit');
+      }
+    }
+    
+    // Log classification results
+    const mtTunnels = [...tunnelClassification.entries()].filter(([_, type]) => type === 'magicTransit').map(([name]) => name);
+    const mwanTunnels = [...tunnelClassification.entries()].filter(([_, type]) => type === 'magicWan').map(([name]) => name);
+    console.log(`Tunnel classification for ${accountId}: MT=[${mtTunnels.join(', ')}] MWAN=[${mwanTunnels.join(', ')}]`);
+    
+    // Cache the classification
+    await env.CONFIG_KV.put(
+      cacheKey,
+      JSON.stringify({ tunnels: Object.fromEntries(tunnelClassification), cachedAt: Date.now() }),
+      { expirationTtl: 7 * 24 * 60 * 60 } // 7 days
+    );
+    
+    return tunnelClassification;
+  } catch (error) {
+    console.error('Error classifying tunnels:', error);
+    return new Map();
+  }
+}
+
+/**
  * Fetch Magic Transit/WAN bandwidth for an account using GraphQL
  * Returns P95th bandwidth in Mbps (account-level metric)
  * @param {string} serviceType - 'magicTransit' or 'magicWan'
@@ -3164,9 +3299,8 @@ async function fetchMagicBandwidthForAccount(apiKey, accountId, serviceConfig, e
 
   // GraphQL query for Magic Transit tunnel traffic
   // Uses avg.bitRateFiveMinutes which is already in bits/sec (NOT total bits)
-  // Filter by direction: ingress for Magic Transit
-  // For Magic WAN, billing uses max(ingress, egress) - we'll query both and use highest P95
-  const directions = serviceType === 'magicTransit' ? ['ingress'] : ['ingress', 'egress'];
+  // Billing methodology: per-tunnel P95, max(ingress, egress) per tunnel, sum all tunnels
+  // Both Magic Transit and Magic WAN use this approach
   const query = `
     query GetTunnelBandwidth($accountTag: String!, $datetimeStart: Date!, $datetimeEnd: Date!, $direction: String!) {
       viewer {
@@ -3192,10 +3326,13 @@ async function fetchMagicBandwidthForAccount(apiKey, accountId, serviceConfig, e
     }
   `;
 
+  // Classify tunnels by IP to separate Magic Transit vs Magic WAN
+  const tunnelClassification = await classifyTunnelsByIP(apiKey, accountId, env);
+  
   // Fetch current month data - use short-term cache to avoid API inconsistency
   let currentP95Mbps = 0;
-  // v6 cache key - fixed: bitRateFiveMinutes is already bps (no /300), Magic WAN uses max(ingress, egress)
-  const currentMonthCacheKey = `current-v6-${serviceType}:${accountId}:${currentMonthKey}:${currentMonthEnd.getHours()}`;
+  // v8 cache key - per-tunnel P95 with IP-based classification
+  const currentMonthCacheKey = `current-v8-${serviceType}:${accountId}:${currentMonthKey}:${currentMonthEnd.getHours()}`;
   const cachedCurrentMonth = await env.CONFIG_KV.get(currentMonthCacheKey, 'json');
   
   if (cachedCurrentMonth && (Date.now() - cachedCurrentMonth.cachedAt) < 5 * 60 * 1000) {
@@ -3203,13 +3340,16 @@ async function fetchMagicBandwidthForAccount(apiKey, accountId, serviceConfig, e
     currentP95Mbps = cachedCurrentMonth.p95Mbps;
     console.log(`${serviceType} current month from cache: ${currentP95Mbps.toFixed(6)} Mbps (age: ${Math.round((Date.now() - cachedCurrentMonth.cachedAt) / 1000)}s)`);
   } else {
-    // Fetch fresh data from API - query all directions and use highest P95
+    // Fetch fresh data from API - per-tunnel P95 methodology
+    // 1. Query both ingress and egress
+    // 2. Classify tunnels and filter by serviceType
+    // 3. Calculate P95 for each matching tunnel separately
+    // 4. Take max(ingress P95, egress P95) per tunnel
+    // 5. Sum all tunnel max P95s
     try {
-      let bestP95Mbps = 0;
-      let bestDirection = '';
-      let bestIntervalCount = 0;
+      const tunnelDataByDirection = { ingress: [], egress: [] };
       
-      for (const direction of directions) {
+      for (const direction of ['ingress', 'egress']) {
         const response = await fetch('https://api.cloudflare.com/client/v4/graphql', {
           method: 'POST',
           headers: {
@@ -3229,79 +3369,110 @@ async function fetchMagicBandwidthForAccount(apiKey, accountId, serviceConfig, e
 
         if (response.ok) {
           const data = await response.json();
-          
           if (data.errors) {
             console.error(`${serviceType} GraphQL errors for account ${accountId}:`, JSON.stringify(data.errors));
           }
-          
-          const tunnelData = data?.data?.viewer?.accounts?.[0]?.magicTransitTunnelTrafficAdaptiveGroups || [];
-          console.log(`${serviceType} (${direction}) received ${tunnelData.length} intervals for account ${accountId}`);
-          
-          const tunnelNames = [...new Set(tunnelData.map(e => e.dimensions?.tunnelName))];
-          console.log(`${serviceType} ${direction} tunnels: ${tunnelNames.join(', ')}`);
-          
-          // Group by time interval and sum across tunnels
-          const intervalMap = new Map();
-          tunnelData.forEach(entry => {
-            const time = entry.dimensions?.datetimeFiveMinutes;
-            // bitRateFiveMinutes is already in bits/sec (NOT total bits - no need to divide by 300)
-            const bitRate = entry.avg?.bitRateFiveMinutes || 0;
-            intervalMap.set(time, (intervalMap.get(time) || 0) + bitRate);
-          });
-          
-          // Calculate total possible intervals and generate all timestamps (WITH FILL approach)
-          const totalIntervals = Math.floor((currentMonthEnd.getTime() - currentMonthStart.getTime()) / (5 * 60 * 1000));
-          
-          // Generate all 5-minute intervals and fill with data or zeros
-          const bandwidthSamples = [];
-          for (let i = 0; i < totalIntervals; i++) {
-            const intervalTime = new Date(currentMonthStart.getTime() + i * 5 * 60 * 1000)
-              .toISOString()
-              .replace('.000Z', 'Z');
-            const bps = intervalMap.get(intervalTime) || 0;
-            bandwidthSamples.push(bps); // Already in bits/sec
-          }
-          bandwidthSamples.sort((a, b) => a - b);
-          
-          const nonZeroCount = bandwidthSamples.filter(bps => bps > 0).length;
-          const maxRate = bandwidthSamples.length > 0 ? Math.max(...bandwidthSamples) : 0;
-          console.log(`${serviceType} ${direction}: ${tunnelNames.length} tunnels, ${nonZeroCount}/${totalIntervals} intervals with data, max=${maxRate.toFixed(0)} bps`);
-          
-          // P95: 95th percentile from ALL intervals (including zeros)
-          const p95Index = Math.floor(bandwidthSamples.length * 0.95);
-          const p95BitsPerSecond = bandwidthSamples.length > 0 
-            ? bandwidthSamples[Math.min(p95Index, bandwidthSamples.length - 1)]
-            : 0;
-          const p95Mbps = p95BitsPerSecond / 1000000;
-          console.log(`${serviceType} ${direction} P95: ${p95BitsPerSecond.toFixed(2)} bps = ${p95Mbps.toFixed(6)} Mbps`);
-          
-          // Use highest P95 across directions (for Magic WAN)
-          if (p95Mbps > bestP95Mbps) {
-            bestP95Mbps = p95Mbps;
-            bestDirection = direction;
-            bestIntervalCount = nonZeroCount;
-          }
+          tunnelDataByDirection[direction] = data?.data?.viewer?.accounts?.[0]?.magicTransitTunnelTrafficAdaptiveGroups || [];
+          console.log(`${serviceType} (${direction}) received ${tunnelDataByDirection[direction].length} entries`);
         } else {
           const errorText = await response.text();
           console.error(`Failed to fetch ${serviceType} ${direction} for account ${accountId}: ${response.status} - ${errorText}`);
         }
       }
       
-      currentP95Mbps = bestP95Mbps;
-      console.log(`${serviceType} FINAL P95: ${currentP95Mbps.toFixed(6)} Mbps (using ${bestDirection})`);
+      // Group data by tunnel name and direction, filtering by service type
+      const tunnelIntervals = { ingress: {}, egress: {} };
+      let skippedTunnels = new Set();
+      for (const direction of ['ingress', 'egress']) {
+        for (const entry of tunnelDataByDirection[direction]) {
+          const tunnelName = entry.dimensions?.tunnelName;
+          if (!tunnelName) continue; // Skip unnamed tunnels
+          
+          // Filter by service type using IP-based classification
+          const classifiedType = tunnelClassification.get(tunnelName);
+          if (classifiedType && classifiedType !== serviceType) {
+            skippedTunnels.add(tunnelName);
+            continue; // Skip tunnels that belong to the other service
+          }
+          
+          const time = entry.dimensions?.datetimeFiveMinutes;
+          const bitRate = entry.avg?.bitRateFiveMinutes || 0;
+          
+          if (!tunnelIntervals[direction][tunnelName]) {
+            tunnelIntervals[direction][tunnelName] = {};
+          }
+          tunnelIntervals[direction][tunnelName][time] = 
+            (tunnelIntervals[direction][tunnelName][time] || 0) + bitRate;
+        }
+      }
+      
+      // Get all unique tunnel names (after filtering)
+      const allTunnelNames = new Set([
+        ...Object.keys(tunnelIntervals.ingress),
+        ...Object.keys(tunnelIntervals.egress)
+      ]);
+      if (skippedTunnels.size > 0) {
+        console.log(`${serviceType} skipped tunnels (wrong type): ${[...skippedTunnels].join(', ')}`);
+      }
+      console.log(`${serviceType} included tunnels: ${[...allTunnelNames].join(', ')}`);
+      
+      // Calculate total intervals for zero-fill
+      const totalIntervals = Math.floor((currentMonthEnd.getTime() - currentMonthStart.getTime()) / (5 * 60 * 1000));
+      
+      // Helper function to calculate P95 for a tunnel's intervals
+      const calcTunnelP95 = (intervalsMap) => {
+        const samples = [];
+        for (let i = 0; i < totalIntervals; i++) {
+          const intervalTime = new Date(currentMonthStart.getTime() + i * 5 * 60 * 1000)
+            .toISOString()
+            .replace('.000Z', 'Z');
+          samples.push(intervalsMap[intervalTime] || 0);
+        }
+        samples.sort((a, b) => a - b);
+        const p95Index = Math.floor(samples.length * 0.95);
+        return samples.length > 0 ? samples[Math.min(p95Index, samples.length - 1)] : 0;
+      };
+      
+      // Calculate P95 per tunnel, take max of ingress/egress, sum all
+      let totalP95Bps = 0;
+      let tunnelCount = 0;
+      const tunnelDetails = [];
+      
+      for (const tunnelName of allTunnelNames) {
+        const ingressP95 = calcTunnelP95(tunnelIntervals.ingress[tunnelName] || {});
+        const egressP95 = calcTunnelP95(tunnelIntervals.egress[tunnelName] || {});
+        const maxP95 = Math.max(ingressP95, egressP95);
+        totalP95Bps += maxP95;
+        tunnelCount++;
+        tunnelDetails.push({ name: tunnelName, ingress: ingressP95, egress: egressP95, max: maxP95 });
+      }
+      
+      // Log tunnel breakdown
+      tunnelDetails.sort((a, b) => b.max - a.max);
+      for (const t of tunnelDetails.slice(0, 5)) {
+        const dir = t.ingress >= t.egress ? 'I' : 'E';
+        console.log(`  ${t.name}: ${(t.max/1e6).toFixed(4)} Mbps [${dir}]`);
+      }
+      if (tunnelDetails.length > 5) {
+        console.log(`  ... and ${tunnelDetails.length - 5} more tunnels`);
+      }
+      
+      currentP95Mbps = totalP95Bps / 1000000;
+      const dataIntervalCount = tunnelDataByDirection.ingress.length + tunnelDataByDirection.egress.length;
+      console.log(`${serviceType} FINAL P95: ${currentP95Mbps.toFixed(6)} Mbps (${tunnelCount} tunnels, sum of per-tunnel max P95s)`);
       
       // Cache the result
       const shouldUpdateCache = !cachedCurrentMonth || 
-        bestIntervalCount > (cachedCurrentMonth.intervalCount || 0) ||
+        dataIntervalCount > (cachedCurrentMonth.intervalCount || 0) ||
         (Date.now() - cachedCurrentMonth.cachedAt) > 15 * 60 * 1000;
       
-      if (shouldUpdateCache && bestIntervalCount > 0) {
+      if (shouldUpdateCache && tunnelCount > 0) {
         await env.CONFIG_KV.put(
           currentMonthCacheKey,
-          JSON.stringify({ p95Mbps: currentP95Mbps, intervalCount: bestIntervalCount, cachedAt: Date.now() }),
+          JSON.stringify({ p95Mbps: currentP95Mbps, intervalCount: dataIntervalCount, tunnelCount, cachedAt: Date.now() }),
           { expirationTtl: 3600 }
         );
-        console.log(`${serviceType} cached: ${currentP95Mbps.toFixed(6)} Mbps (${bestIntervalCount} intervals, ${bestDirection})`);
+        console.log(`${serviceType} cached: ${currentP95Mbps.toFixed(6)} Mbps (${tunnelCount} tunnels)`);
       } else if (cachedCurrentMonth) {
         currentP95Mbps = cachedCurrentMonth.p95Mbps;
         console.log(`${serviceType} keeping cached: ${currentP95Mbps.toFixed(6)} Mbps`);
@@ -3313,7 +3484,8 @@ async function fetchMagicBandwidthForAccount(apiKey, accountId, serviceConfig, e
   }
 
   // Get previous month data - first try cache, then fetch from API
-  const previousMonthCacheKey = `monthly-${serviceType}:${accountId}:${previousMonthKey}`;
+  // Use v3 cache key for per-tunnel methodology with IP-based classification
+  const previousMonthCacheKey = `monthly-v3-${serviceType}:${accountId}:${previousMonthKey}`;
   let previousP95Mbps = 0;
   
   const cachedPreviousMonth = await env.CONFIG_KV.get(previousMonthCacheKey, 'json');
@@ -3321,48 +3493,94 @@ async function fetchMagicBandwidthForAccount(apiKey, accountId, serviceConfig, e
     previousP95Mbps = cachedPreviousMonth.p95Mbps || 0;
     console.log(`${serviceType} previous month from cache: ${previousP95Mbps} Mbps`);
   } else {
-    // No cache - fetch previous month from API
+    // No cache - fetch previous month from API using per-tunnel methodology
     console.log(`${serviceType} fetching previous month from API for ${previousMonthKey}`);
     try {
-      const prevResponse = await fetch('https://api.cloudflare.com/client/v4/graphql', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          query,
-          variables: {
-            accountTag: accountId,
-            datetimeStart: previousMonthStart.toISOString(),
-            datetimeEnd: previousMonthEnd.toISOString(),
-            direction: direction,
+      const prevTunnelDataByDirection = { ingress: [], egress: [] };
+      
+      for (const direction of ['ingress', 'egress']) {
+        const prevResponse = await fetch('https://api.cloudflare.com/client/v4/graphql', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${apiKey}`,
+            'Content-Type': 'application/json',
           },
-        }),
-      });
+          body: JSON.stringify({
+            query,
+            variables: {
+              accountTag: accountId,
+              datetimeStart: previousMonthStart.toISOString(),
+              datetimeEnd: previousMonthEnd.toISOString(),
+              direction: direction,
+            },
+          }),
+        });
 
-      if (prevResponse.ok) {
-        const prevData = await prevResponse.json();
-        const prevTunnelData = prevData?.data?.viewer?.accounts?.[0]?.magicTransitTunnelTrafficAdaptiveGroups || [];
-        
-        // P95 from data intervals only (convert to bits/sec by dividing by 300)
-        const prevSamples = prevTunnelData
-          .map(entry => (entry.avg?.bitRateFiveMinutes || 0) / 300)
-          .filter(bps => bps > 0)
-          .sort((a, b) => a - b);
-        
-        const p95Index = Math.floor(prevSamples.length * 0.95);
-        const p95BitsPerSecond = prevSamples.length > 0 
-          ? prevSamples[Math.min(p95Index, prevSamples.length - 1)]
-          : 0;
-        previousP95Mbps = p95BitsPerSecond / 1000000;
-        
-        console.log(`${serviceType} previous month from API: ${previousP95Mbps.toFixed(6)} Mbps (${prevSamples.length} data intervals)`);
-        
-        // Cache the fetched previous month data
+        if (prevResponse.ok) {
+          const prevData = await prevResponse.json();
+          prevTunnelDataByDirection[direction] = prevData?.data?.viewer?.accounts?.[0]?.magicTransitTunnelTrafficAdaptiveGroups || [];
+        }
+      }
+      
+      // Group by tunnel and calculate per-tunnel P95, filtering by service type
+      const prevTunnelIntervals = { ingress: {}, egress: {} };
+      for (const direction of ['ingress', 'egress']) {
+        for (const entry of prevTunnelDataByDirection[direction]) {
+          const tunnelName = entry.dimensions?.tunnelName;
+          if (!tunnelName) continue;
+          
+          // Filter by service type using IP-based classification
+          const classifiedType = tunnelClassification.get(tunnelName);
+          if (classifiedType && classifiedType !== serviceType) {
+            continue; // Skip tunnels that belong to the other service
+          }
+          
+          const time = entry.dimensions?.datetimeFiveMinutes;
+          const bitRate = entry.avg?.bitRateFiveMinutes || 0;
+          
+          if (!prevTunnelIntervals[direction][tunnelName]) {
+            prevTunnelIntervals[direction][tunnelName] = {};
+          }
+          prevTunnelIntervals[direction][tunnelName][time] = 
+            (prevTunnelIntervals[direction][tunnelName][time] || 0) + bitRate;
+        }
+      }
+      
+      const prevTunnelNames = new Set([
+        ...Object.keys(prevTunnelIntervals.ingress),
+        ...Object.keys(prevTunnelIntervals.egress)
+      ]);
+      
+      const prevTotalIntervals = Math.floor((previousMonthEnd.getTime() - previousMonthStart.getTime()) / (5 * 60 * 1000));
+      
+      const calcPrevTunnelP95 = (intervalsMap) => {
+        const samples = [];
+        for (let i = 0; i < prevTotalIntervals; i++) {
+          const intervalTime = new Date(previousMonthStart.getTime() + i * 5 * 60 * 1000)
+            .toISOString()
+            .replace('.000Z', 'Z');
+          samples.push(intervalsMap[intervalTime] || 0);
+        }
+        samples.sort((a, b) => a - b);
+        const p95Index = Math.floor(samples.length * 0.95);
+        return samples.length > 0 ? samples[Math.min(p95Index, samples.length - 1)] : 0;
+      };
+      
+      let prevTotalP95Bps = 0;
+      for (const tunnelName of prevTunnelNames) {
+        const ingressP95 = calcPrevTunnelP95(prevTunnelIntervals.ingress[tunnelName] || {});
+        const egressP95 = calcPrevTunnelP95(prevTunnelIntervals.egress[tunnelName] || {});
+        prevTotalP95Bps += Math.max(ingressP95, egressP95);
+      }
+      
+      previousP95Mbps = prevTotalP95Bps / 1000000;
+      console.log(`${serviceType} previous month from API: ${previousP95Mbps.toFixed(6)} Mbps (${prevTunnelNames.size} tunnels)`);
+      
+      // Cache the fetched previous month data
+      if (prevTunnelNames.size > 0) {
         await env.CONFIG_KV.put(
           previousMonthCacheKey,
-          JSON.stringify({ p95Mbps: previousP95Mbps, cachedAt: Date.now() }),
+          JSON.stringify({ p95Mbps: previousP95Mbps, tunnelCount: prevTunnelNames.size, cachedAt: Date.now() }),
           { expirationTtl: 31536000 }
         );
       }
