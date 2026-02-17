@@ -2,7 +2,7 @@
 
 A real-time dashboard for Cloudflare Enterprise customers to monitor their monthly consumption against contracted limits. Built with Cloudflare Workers, React, and Vite.
 
-<img width="1356" height="916" alt="Screenshot 2026-02-17 at 10 24 55" src="https://github.com/user-attachments/assets/d80d42fb-ac39-4110-8519-778b045fa5e4" />
+<img width="967" height="921" alt="Screenshot 2026-02-17 at 10 24 43" src="https://github.com/user-attachments/assets/80971398-0978-422e-9d9b-fea32db7c579" />
 
 ## ⚠️ Important Disclaimer
 
