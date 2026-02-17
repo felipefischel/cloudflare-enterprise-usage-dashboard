@@ -695,6 +695,153 @@ async function getMetricsProgressive(request, env, corsHeaders) {
       console.log('⏭️ Zero Trust Seats disabled - skipping fetch');
     }
     
+    // Fetch Workers & Pages if enabled
+    let workersPagesData = null;
+    const wpAccountIds = config?.developerServices?.workersPages?.accountIds || [];
+    if (config?.developerServices?.workersPages?.enabled && wpAccountIds.length > 0) {
+      const wpStart = Date.now();
+      console.log(`⚡ Fetching Workers & Pages for ${wpAccountIds.length} account(s)...`);
+      const wpConfig = config.developerServices.workersPages;
+      
+      const wpPromises = wpAccountIds.map(accountId =>
+        fetchWorkersPagesForAccount(apiKey, accountId, wpConfig, env)
+          .then(data => ({ accountId, data }))
+      );
+      
+      const wpResults = await Promise.allSettled(wpPromises);
+      const wpData = wpResults
+        .filter(result => result.status === 'fulfilled' && result.value?.data)
+        .map(result => result.value);
+      
+      if (wpData.length > 0) {
+        // Merge timeSeries from all accounts
+        const timeSeriesMap = new Map();
+        wpData.forEach(accountEntry => {
+          if (accountEntry.data.timeSeries) {
+            accountEntry.data.timeSeries.forEach(entry => {
+              const existing = timeSeriesMap.get(entry.month);
+              if (existing) {
+                existing.requests += entry.requests || 0;
+                existing.cpuTimeMs += entry.cpuTimeMs || 0;
+              } else {
+                timeSeriesMap.set(entry.month, {
+                  month: entry.month,
+                  timestamp: entry.timestamp,
+                  requests: entry.requests || 0,
+                  cpuTimeMs: entry.cpuTimeMs || 0,
+                });
+              }
+            });
+          }
+        });
+
+        const mergedTimeSeries = Array.from(timeSeriesMap.values())
+          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+        workersPagesData = {
+          enabled: true,
+          requestsThreshold: wpConfig.requestsThreshold,
+          cpuTimeThreshold: wpConfig.cpuTimeThreshold,
+          current: {
+            requests: wpData.reduce((sum, entry) => sum + entry.data.current.requests, 0),
+            cpuTimeMs: wpData.reduce((sum, entry) => sum + entry.data.current.cpuTimeMs, 0),
+          },
+          previous: {
+            requests: wpData.reduce((sum, entry) => sum + entry.data.previous.requests, 0),
+            cpuTimeMs: wpData.reduce((sum, entry) => sum + entry.data.previous.cpuTimeMs, 0),
+          },
+          timeSeries: mergedTimeSeries,
+          perAccountData: wpData.map(entry => ({
+            accountId: entry.accountId,
+            current: entry.data.current,
+            previous: entry.data.previous,
+            timeSeries: entry.data.timeSeries,
+          })),
+        };
+        console.log(`Workers & Pages: ${workersPagesData.current.requests.toLocaleString()} requests, ${workersPagesData.current.cpuTimeMs.toLocaleString()} ms CPU time`);
+      }
+      timings.workersPages = Date.now() - wpStart;
+      console.log(`⏱️ Workers & Pages: ${timings.workersPages}ms`);
+    } else {
+      console.log('⏭️ Workers & Pages disabled - skipping fetch');
+    }
+    
+    // Fetch R2 Storage if enabled
+    let r2StorageData = null;
+    const r2AccountIds = config?.developerServices?.r2Storage?.accountIds || [];
+    if (config?.developerServices?.r2Storage?.enabled && r2AccountIds.length > 0) {
+      const r2Start = Date.now();
+      console.log(`📦 Fetching R2 Storage for ${r2AccountIds.length} account(s)...`);
+      const r2Config = config.developerServices.r2Storage;
+      
+      const r2Results = await Promise.allSettled(
+        r2AccountIds.map(accountId =>
+          fetchR2StorageForAccount(apiKey, accountId, r2Config, env)
+            .then(data => ({ accountId, data }))
+        )
+      );
+      
+      const successfulR2 = r2Results
+        .filter(r => r.status === 'fulfilled' && r.value?.data)
+        .map(r => r.value);
+      
+      if (successfulR2.length > 0) {
+        const timeSeriesMap = new Map();
+        successfulR2.forEach(accountEntry => {
+          if (accountEntry.data.timeSeries) {
+            accountEntry.data.timeSeries.forEach(entry => {
+              const existing = timeSeriesMap.get(entry.month);
+              if (existing) {
+                existing.classAOps += entry.classAOps || 0;
+                existing.classBOps += entry.classBOps || 0;
+                existing.storageGB += entry.storageGB || 0;
+              } else {
+                timeSeriesMap.set(entry.month, {
+                  month: entry.month,
+                  timestamp: entry.timestamp,
+                  classAOps: entry.classAOps || 0,
+                  classBOps: entry.classBOps || 0,
+                  storageGB: entry.storageGB || 0,
+                });
+              }
+            });
+          }
+        });
+
+        const mergedTimeSeries = Array.from(timeSeriesMap.values())
+          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+        r2StorageData = {
+          enabled: true,
+          classAOpsThreshold: r2Config.classAOpsThreshold,
+          classBOpsThreshold: r2Config.classBOpsThreshold,
+          storageThreshold: r2Config.storageThreshold,
+          current: {
+            classAOps: successfulR2.reduce((sum, e) => sum + (e.data.current?.classAOps || 0), 0),
+            classBOps: successfulR2.reduce((sum, e) => sum + (e.data.current?.classBOps || 0), 0),
+            storageGB: successfulR2.reduce((sum, e) => sum + (e.data.current?.storageGB || 0), 0),
+          },
+          previous: {
+            classAOps: successfulR2.reduce((sum, e) => sum + (e.data.previous?.classAOps || 0), 0),
+            classBOps: successfulR2.reduce((sum, e) => sum + (e.data.previous?.classBOps || 0), 0),
+            storageGB: successfulR2.reduce((sum, e) => sum + (e.data.previous?.storageGB || 0), 0),
+          },
+          timeSeries: mergedTimeSeries,
+          perAccountData: successfulR2.map(entry => ({
+            accountId: entry.accountId,
+            current: entry.data.current,
+            previous: entry.data.previous,
+            timeSeries: entry.data.timeSeries,
+          })),
+        };
+        console.log(`R2 Storage: ${r2StorageData.current.classAOps.toLocaleString()} Class A ops, ${r2StorageData.current.classBOps.toLocaleString()} Class B ops, ${r2StorageData.current.storageGB.toFixed(2)} GB`);
+      }
+      timings.r2Storage = Date.now() - r2Start;
+      console.log(`⏱️ R2 Storage: ${timings.r2Storage}ms`);
+    } else {
+      console.log('⏭️ R2 Storage disabled - skipping fetch');
+    }
+    
     // Fetch Magic Transit and Magic WAN in PARALLEL for performance
     let magicTransitData = null;
     let magicWanData = null;
@@ -751,11 +898,15 @@ async function getMetricsProgressive(request, env, corsHeaders) {
                 const existing = timeSeriesMap.get(entry.month);
                 if (existing) {
                   existing.p95Mbps += entry.p95Mbps || 0;
+                  existing.ingressP95Mbps += entry.ingressP95Mbps || 0;
+                  existing.egressP95Mbps += entry.egressP95Mbps || 0;
                 } else {
                   timeSeriesMap.set(entry.month, {
                     month: entry.month,
                     timestamp: entry.timestamp,
                     p95Mbps: entry.p95Mbps || 0,
+                    ingressP95Mbps: entry.ingressP95Mbps || 0,
+                    egressP95Mbps: entry.egressP95Mbps || 0,
                   });
                 }
               });
@@ -765,15 +916,25 @@ async function getMetricsProgressive(request, env, corsHeaders) {
           const mergedTimeSeries = Array.from(timeSeriesMap.values())
             .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
 
+          // Build current data - always include ingress/egress breakdown
+          const currentData = {
+            p95Mbps: result.data.reduce((sum, entry) => sum + (entry.data.current?.p95Mbps || 0), 0),
+            ingressP95Mbps: result.data.reduce((sum, entry) => sum + (entry.data.current?.ingressP95Mbps || 0), 0),
+            egressP95Mbps: result.data.reduce((sum, entry) => sum + (entry.data.current?.egressP95Mbps || 0), 0),
+          };
+
+          // Build previous data - always include ingress/egress breakdown
+          const previousData = {
+            p95Mbps: result.data.reduce((sum, entry) => sum + (entry.data.previous?.p95Mbps || 0), 0),
+            ingressP95Mbps: result.data.reduce((sum, entry) => sum + (entry.data.previous?.ingressP95Mbps || 0), 0),
+            egressP95Mbps: result.data.reduce((sum, entry) => sum + (entry.data.previous?.egressP95Mbps || 0), 0),
+          };
+
           const serviceData = {
             enabled: true,
             threshold: result.config.threshold,
-            current: {
-              p95Mbps: result.data.reduce((sum, entry) => sum + entry.data.current.p95Mbps, 0),
-            },
-            previous: {
-              p95Mbps: result.data.reduce((sum, entry) => sum + entry.data.previous.p95Mbps, 0),
-            },
+            current: currentData,
+            previous: previousData,
             timeSeries: mergedTimeSeries,
             perAccountData: result.data.map(entry => ({
               accountId: entry.accountId,
@@ -814,6 +975,8 @@ async function getMetricsProgressive(request, env, corsHeaders) {
       ...(pageShieldData && { pageShield: pageShieldData }),
       ...(advancedRateLimitingData && { advancedRateLimiting: advancedRateLimitingData }),
       ...(zeroTrustSeatsData && { zeroTrustSeats: zeroTrustSeatsData }),
+      ...(workersPagesData && { workersPages: workersPagesData }),
+      ...(r2StorageData && { r2Storage: r2StorageData }),
       ...(magicTransitData && { magicTransit: magicTransitData }),
       ...(magicWanData && { magicWan: magicWanData }),
     };
@@ -2110,21 +2273,75 @@ async function getZones(request, env, corsHeaders) {
     }
   }
 
+  const zoneCount = allEnterpriseZones.length;
+  const now = new Date();
+  const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  try {
+    await env.CONFIG_KV.put(
+      `monthly-zone-count:${monthKey}`,
+      JSON.stringify({ count: zoneCount, timestamp: now.toISOString() }),
+      { expirationTtl: 31536000 }
+    );
+  } catch (e) {
+    console.error('Failed to store zone count snapshot:', e);
+  }
+
+  const zonesTimeSeries = await getHistoricalZoneCountData(env, zoneCount);
+
   return new Response(
     JSON.stringify({
-      total: allEnterpriseZones.length,
-      enterprise: allEnterpriseZones.length,
+      total: zoneCount,
+      enterprise: zoneCount,
       zones: allEnterpriseZones.map(z => ({ 
         id: z.id, 
         name: z.name,
         account: z.account 
       })),
-      accounts: accountNames, // Include account names map for accounts without zones
+      accounts: accountNames,
+      zonesTimeSeries,
     }),
     {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     }
   );
+}
+
+async function getHistoricalZoneCountData(env, currentCount) {
+  const timeSeries = [];
+  const now = new Date();
+  const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+
+  try {
+    const listResult = await env.CONFIG_KV.list({ prefix: 'monthly-zone-count:' });
+    for (const key of listResult.keys) {
+      const data = await env.CONFIG_KV.get(key.name, 'json');
+      if (data) {
+        const month = key.name.replace('monthly-zone-count:', '');
+        const [year, monthNum] = month.split('-');
+        timeSeries.push({
+          month,
+          timestamp: new Date(parseInt(year), parseInt(monthNum) - 1, 1).toISOString(),
+          zones: data.count,
+        });
+      }
+    }
+  } catch (e) {
+    console.error('Failed to load historical zone count data:', e);
+  }
+
+  const hasCurrentMonth = timeSeries.some(e => e.month === currentMonthKey);
+  if (!hasCurrentMonth && currentCount > 0) {
+    timeSeries.push({
+      month: currentMonthKey,
+      timestamp: new Date(now.getFullYear(), now.getMonth(), 1).toISOString(),
+      zones: currentCount,
+    });
+  } else if (hasCurrentMonth) {
+    const entry = timeSeries.find(e => e.month === currentMonthKey);
+    if (entry) entry.zones = currentCount;
+  }
+
+  return timeSeries.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
 }
 
 /**
@@ -3135,6 +3352,561 @@ async function getHistoricalZeroTrustSeatsData(env, accountId) {
 }
 
 /**
+ * Fetch Workers & Pages metrics for an account
+ * Returns requests and CPU time (account-level metrics)
+ */
+async function fetchWorkersPagesForAccount(apiKey, accountId, workersPagesConfig, env) {
+  if (!workersPagesConfig || !workersPagesConfig.enabled) {
+    return null;
+  }
+
+  const now = new Date();
+  const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const previousMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const previousMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999);
+  const previousMonthKey = `${previousMonthStart.getFullYear()}-${String(previousMonthStart.getMonth() + 1).padStart(2, '0')}`;
+
+  // GraphQL query for Workers & Pages metrics
+  const query = `
+    query getWorkersAndPagesMetrics($accountTag: string!, $monthlyFilter: AccountWorkersInvocationsAdaptiveFilter_InputObject, $monthlyOverviewFilter: AccountWorkersOverviewRequestsAdaptiveGroupsFilter_InputObject) {
+      viewer {
+        accounts(filter: {accountTag: $accountTag}) {
+          monthlyPagesFunctionsInvocationsAdaptiveGroups: pagesFunctionsInvocationsAdaptiveGroups(limit: 1000, filter: $monthlyFilter) {
+            sum {
+              requests
+            }
+            dimensions {
+              usageModel
+            }
+          }
+          monthlyWorkersInvocationsAdaptive: workersInvocationsAdaptive(limit: 10000, filter: $monthlyFilter) {
+            sum {
+              requests
+            }
+            dimensions {
+              usageModel
+            }
+          }
+          monthlyWorkersOverviewRequestsAdaptiveGroups: workersOverviewRequestsAdaptiveGroups(limit: 1000, filter: $monthlyOverviewFilter) {
+            sum {
+              cpuTimeUs
+            }
+            dimensions {
+              usageModel
+            }
+          }
+        }
+      }
+    }
+  `;
+
+  let currentRequests = 0;
+  let currentCpuTimeMs = 0;
+
+  try {
+    // Format dates for current month
+    const monthlyFilter = {
+      date_geq: currentMonthStart.toISOString().split('T')[0],
+      date_leq: now.toISOString().split('T')[0],
+    };
+    const monthlyOverviewFilter = {
+      datetime_geq: currentMonthStart.toISOString(),
+      datetime_leq: now.toISOString(),
+    };
+
+    const response = await fetch('https://api.cloudflare.com/client/v4/graphql', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        query,
+        variables: {
+          accountTag: accountId,
+          monthlyFilter,
+          monthlyOverviewFilter,
+        },
+      }),
+    });
+
+    if (!response.ok) {
+      console.error(`Workers & Pages GraphQL failed for account ${accountId}: ${response.status}`);
+      return null;
+    }
+
+    const data = await response.json();
+    
+    if (data.errors) {
+      console.error(`Workers & Pages GraphQL errors for account ${accountId}:`, data.errors);
+      return null;
+    }
+
+    const account = data.data?.viewer?.accounts?.[0];
+    if (!account) {
+      console.log(`No Workers & Pages data for account ${accountId}`);
+      return { current: { requests: 0, cpuTimeMs: 0 }, previous: { requests: 0, cpuTimeMs: 0 }, timeSeries: [] };
+    }
+
+    // Sum requests from Workers and Pages Functions
+    const workersRequests = account.monthlyWorkersInvocationsAdaptive?.reduce(
+      (sum, entry) => sum + (entry.sum?.requests || 0), 0
+    ) || 0;
+    const pagesRequests = account.monthlyPagesFunctionsInvocationsAdaptiveGroups?.reduce(
+      (sum, entry) => sum + (entry.sum?.requests || 0), 0
+    ) || 0;
+    currentRequests = workersRequests + pagesRequests;
+
+    // Sum CPU time (convert from microseconds to milliseconds)
+    const cpuTimeUs = account.monthlyWorkersOverviewRequestsAdaptiveGroups?.reduce(
+      (sum, entry) => sum + (entry.sum?.cpuTimeUs || 0), 0
+    ) || 0;
+    currentCpuTimeMs = cpuTimeUs / 1000; // Convert to milliseconds
+
+    console.log(`Workers & Pages for account ${accountId}: ${currentRequests.toLocaleString()} requests, ${currentCpuTimeMs.toLocaleString()} ms CPU time`);
+
+  } catch (error) {
+    console.error(`Error fetching Workers & Pages for account ${accountId}:`, error);
+    return null;
+  }
+
+  // Get cached previous month data
+  const previousMonthCacheKey = `monthly-workers-pages:${accountId}:${previousMonthKey}`;
+  let previousRequests = 0;
+  let previousCpuTimeMs = 0;
+  
+  const cachedPreviousMonth = await env.CONFIG_KV.get(previousMonthCacheKey, 'json');
+  if (cachedPreviousMonth) {
+    previousRequests = cachedPreviousMonth.requests || 0;
+    previousCpuTimeMs = cachedPreviousMonth.cpuTimeMs || 0;
+    console.log(`Workers & Pages previous month from cache: ${previousRequests.toLocaleString()} requests, ${previousCpuTimeMs.toLocaleString()} ms`);
+  } else if (now.getDate() >= 2) {
+    // Fetch previous month data from API
+    try {
+      const prevMonthlyFilter = {
+        date_geq: previousMonthStart.toISOString().split('T')[0],
+        date_leq: previousMonthEnd.toISOString().split('T')[0],
+      };
+      const prevMonthlyOverviewFilter = {
+        datetime_geq: previousMonthStart.toISOString(),
+        datetime_leq: previousMonthEnd.toISOString(),
+      };
+
+      const prevResponse = await fetch('https://api.cloudflare.com/client/v4/graphql', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          query,
+          variables: {
+            accountTag: accountId,
+            monthlyFilter: prevMonthlyFilter,
+            monthlyOverviewFilter: prevMonthlyOverviewFilter,
+          },
+        }),
+      });
+
+      if (prevResponse.ok) {
+        const prevData = await prevResponse.json();
+        const prevAccount = prevData.data?.viewer?.accounts?.[0];
+        
+        if (prevAccount) {
+          const prevWorkersRequests = prevAccount.monthlyWorkersInvocationsAdaptive?.reduce(
+            (sum, entry) => sum + (entry.sum?.requests || 0), 0
+          ) || 0;
+          const prevPagesRequests = prevAccount.monthlyPagesFunctionsInvocationsAdaptiveGroups?.reduce(
+            (sum, entry) => sum + (entry.sum?.requests || 0), 0
+          ) || 0;
+          previousRequests = prevWorkersRequests + prevPagesRequests;
+
+          const prevCpuTimeUs = prevAccount.monthlyWorkersOverviewRequestsAdaptiveGroups?.reduce(
+            (sum, entry) => sum + (entry.sum?.cpuTimeUs || 0), 0
+          ) || 0;
+          previousCpuTimeMs = prevCpuTimeUs / 1000;
+
+          // Cache the previous month data
+          await env.CONFIG_KV.put(
+            previousMonthCacheKey,
+            JSON.stringify({ requests: previousRequests, cpuTimeMs: previousCpuTimeMs, cachedAt: Date.now() }),
+            { expirationTtl: 31536000 } // 1 year
+          );
+          console.log(`Workers & Pages previous month cached: ${previousRequests.toLocaleString()} requests`);
+        }
+      }
+    } catch (prevError) {
+      console.error(`Failed to fetch previous month Workers & Pages:`, prevError);
+    }
+  }
+
+  // Cache current month snapshot at end of month (day >= 28)
+  if (now.getDate() >= 28) {
+    const currentMonthCacheKey = `monthly-workers-pages:${accountId}:${currentMonthKey}`;
+    const existingCurrentCache = await env.CONFIG_KV.get(currentMonthCacheKey, 'json');
+    if (!existingCurrentCache) {
+      try {
+        await env.CONFIG_KV.put(
+          currentMonthCacheKey,
+          JSON.stringify({ requests: currentRequests, cpuTimeMs: currentCpuTimeMs, cachedAt: Date.now() }),
+          { expirationTtl: 31536000 } // 1 year
+        );
+        console.log(`Cached Workers & Pages snapshot for ${currentMonthKey}`);
+      } catch (cacheError) {
+        console.error('Failed to cache Workers & Pages snapshot:', cacheError);
+      }
+    }
+  }
+
+  // Load historical data for time series
+  const historicalData = await getHistoricalWorkersPagesData(env, accountId);
+
+  // Build time series
+  const timeSeries = [
+    ...historicalData,
+    {
+      month: currentMonthKey,
+      timestamp: currentMonthStart.toISOString(),
+      requests: currentRequests,
+      cpuTimeMs: currentCpuTimeMs,
+    }
+  ].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+  // Deduplicate by month (keep latest)
+  const timeSeriesMap = new Map();
+  timeSeries.forEach(entry => {
+    timeSeriesMap.set(entry.month, entry);
+  });
+  const deduplicatedTimeSeries = Array.from(timeSeriesMap.values())
+    .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+  return {
+    current: { requests: currentRequests, cpuTimeMs: currentCpuTimeMs },
+    previous: { requests: previousRequests, cpuTimeMs: previousCpuTimeMs },
+    timeSeries: deduplicatedTimeSeries,
+  };
+}
+
+/**
+ * Get historical Workers & Pages data from KV
+ */
+async function getHistoricalWorkersPagesData(env, accountId) {
+  const historicalData = [];
+  
+  try {
+    const listResult = await env.CONFIG_KV.list({ prefix: `monthly-workers-pages:${accountId}:` });
+    
+    for (const key of listResult.keys) {
+      const data = await env.CONFIG_KV.get(key.name, 'json');
+      if (data) {
+        const month = key.name.split(':')[2];
+        const [year, monthNum] = month.split('-');
+        const timestamp = new Date(parseInt(year), parseInt(monthNum) - 1, 1).toISOString();
+        
+        historicalData.push({
+          month,
+          timestamp,
+          requests: data.requests || 0,
+          cpuTimeMs: data.cpuTimeMs || 0,
+        });
+      }
+    }
+  } catch (error) {
+    console.error('Error loading historical Workers & Pages data:', error);
+  }
+  
+  return historicalData;
+}
+
+/**
+ * Fetch R2 Storage metrics for an account
+ * Returns Class A ops, Class B ops, and total storage (account-level metrics)
+ */
+async function fetchR2StorageForAccount(apiKey, accountId, r2Config, env) {
+  if (!r2Config || !r2Config.enabled) {
+    return null;
+  }
+
+  const now = new Date();
+  const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const previousMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const previousMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999);
+  const previousMonthKey = `${previousMonthStart.getFullYear()}-${String(previousMonthStart.getMonth() + 1).padStart(2, '0')}`;
+
+  const query = `
+    query getR2Storage($accountTag: string!, $storageFilter: AccountR2StorageAdaptiveGroupsFilter_InputObject, $classAOpsFilter: AccountR2OperationsAdaptiveGroupsFilter_InputObject, $classBOpsFilter: AccountR2OperationsAdaptiveGroupsFilter_InputObject) {
+      viewer {
+        accounts(filter: {accountTag: $accountTag}) {
+          r2StorageAdaptiveGroups(limit: 10000, orderBy: [date_DESC], filter: $storageFilter) {
+            max {
+              payloadSize
+              metadataSize
+            }
+            dimensions {
+              date
+            }
+          }
+          classAOps: r2OperationsAdaptiveGroups(limit: 10000, filter: $classAOpsFilter) {
+            sum {
+              requests
+            }
+            dimensions {
+              date
+            }
+          }
+          classBOps: r2OperationsAdaptiveGroups(limit: 10000, filter: $classBOpsFilter) {
+            sum {
+              requests
+            }
+            dimensions {
+              date
+            }
+          }
+        }
+      }
+    }
+  `;
+
+  let currentClassAOps = 0;
+  let currentClassBOps = 0;
+  let currentStorageBytes = 0;
+
+  try {
+    const dateStart = currentMonthStart.toISOString().split('T')[0];
+    const dateEnd = now.toISOString().split('T')[0];
+
+    const storageFilter = {
+      date_geq: dateStart,
+      date_leq: dateEnd,
+    };
+    const classAOpsFilter = {
+      date_geq: dateStart,
+      date_leq: dateEnd,
+      actionType_in: ['ListBuckets', 'PutBucket', 'ListObjects', 'PutObject', 'CopyObject', 'CompleteMultipartUpload', 'CreateMultipartUpload', 'UploadPart', 'UploadPartCopy', 'PutBucketEncryption', 'PutBucketCors', 'PutBucketLifecycleConfiguration'],
+    };
+    const classBOpsFilter = {
+      date_geq: dateStart,
+      date_leq: dateEnd,
+      actionType_in: ['HeadBucket', 'HeadObject', 'GetObject', 'ReportUsageSummary', 'GetBucketEncryption', 'GetBucketLocation', 'GetBucketCors', 'GetBucketLifecycleConfiguration'],
+    };
+
+    const response = await fetch('https://api.cloudflare.com/client/v4/graphql', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        query,
+        variables: {
+          accountTag: accountId,
+          storageFilter,
+          classAOpsFilter,
+          classBOpsFilter,
+        },
+      }),
+    });
+
+    if (!response.ok) {
+      console.error(`R2 Storage GraphQL failed for account ${accountId}: ${response.status}`);
+      return null;
+    }
+
+    const data = await response.json();
+    
+    if (data.errors) {
+      console.error(`R2 Storage GraphQL errors for account ${accountId}:`, data.errors);
+      return null;
+    }
+
+    const account = data.data?.viewer?.accounts?.[0];
+    if (!account) {
+      console.log(`No R2 Storage data for account ${accountId}`);
+      return { current: { classAOps: 0, classBOps: 0, storageGB: 0 }, previous: { classAOps: 0, classBOps: 0, storageGB: 0 }, timeSeries: [] };
+    }
+
+    currentClassAOps = account.classAOps?.reduce(
+      (sum, entry) => sum + (entry.sum?.requests || 0), 0
+    ) || 0;
+
+    currentClassBOps = account.classBOps?.reduce(
+      (sum, entry) => sum + (entry.sum?.requests || 0), 0
+    ) || 0;
+
+    const storageData = account.r2StorageAdaptiveGroups || [];
+    if (storageData.length > 0) {
+      const latestStorage = storageData[0];
+      currentStorageBytes = (latestStorage.max?.payloadSize || 0) + (latestStorage.max?.metadataSize || 0);
+    }
+
+    const currentStorageGB = currentStorageBytes / (1024 * 1024 * 1024);
+
+    console.log(`R2 Storage for account ${accountId}: ${currentClassAOps.toLocaleString()} Class A ops, ${currentClassBOps.toLocaleString()} Class B ops, ${currentStorageGB.toFixed(2)} GB`);
+
+  } catch (error) {
+    console.error(`Error fetching R2 Storage for account ${accountId}:`, error);
+    return null;
+  }
+
+  const currentStorageGB = currentStorageBytes / (1024 * 1024 * 1024);
+
+  let previousClassAOps = 0;
+  let previousClassBOps = 0;
+  let previousStorageGB = 0;
+  
+  const previousMonthCacheKey = `monthly-r2-storage:${accountId}:${previousMonthKey}`;
+  const cachedPreviousMonth = await env.CONFIG_KV.get(previousMonthCacheKey, 'json');
+  
+  if (cachedPreviousMonth) {
+    previousClassAOps = cachedPreviousMonth.classAOps || 0;
+    previousClassBOps = cachedPreviousMonth.classBOps || 0;
+    previousStorageGB = cachedPreviousMonth.storageGB || 0;
+    console.log(`R2 Storage previous month from cache: ${previousClassAOps.toLocaleString()} Class A, ${previousClassBOps.toLocaleString()} Class B, ${previousStorageGB.toFixed(2)} GB`);
+  } else if (now.getDate() >= 2) {
+    try {
+      const prevDateStart = previousMonthStart.toISOString().split('T')[0];
+      const prevDateEnd = previousMonthEnd.toISOString().split('T')[0];
+
+      const prevStorageFilter = {
+        date_geq: prevDateStart,
+        date_leq: prevDateEnd,
+      };
+      const prevClassAOpsFilter = {
+        date_geq: prevDateStart,
+        date_leq: prevDateEnd,
+        actionType_in: ['ListBuckets', 'PutBucket', 'ListObjects', 'PutObject', 'CopyObject', 'CompleteMultipartUpload', 'CreateMultipartUpload', 'UploadPart', 'UploadPartCopy', 'PutBucketEncryption', 'PutBucketCors', 'PutBucketLifecycleConfiguration'],
+      };
+      const prevClassBOpsFilter = {
+        date_geq: prevDateStart,
+        date_leq: prevDateEnd,
+        actionType_in: ['HeadBucket', 'HeadObject', 'GetObject', 'ReportUsageSummary', 'GetBucketEncryption', 'GetBucketLocation', 'GetBucketCors', 'GetBucketLifecycleConfiguration'],
+      };
+
+      const prevResponse = await fetch('https://api.cloudflare.com/client/v4/graphql', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          query,
+          variables: {
+            accountTag: accountId,
+            storageFilter: prevStorageFilter,
+            classAOpsFilter: prevClassAOpsFilter,
+            classBOpsFilter: prevClassBOpsFilter,
+          },
+        }),
+      });
+
+      if (prevResponse.ok) {
+        const prevData = await prevResponse.json();
+        const prevAccount = prevData.data?.viewer?.accounts?.[0];
+        
+        if (prevAccount) {
+          previousClassAOps = prevAccount.classAOps?.reduce(
+            (sum, entry) => sum + (entry.sum?.requests || 0), 0
+          ) || 0;
+          previousClassBOps = prevAccount.classBOps?.reduce(
+            (sum, entry) => sum + (entry.sum?.requests || 0), 0
+          ) || 0;
+          
+          const prevStorageData = prevAccount.r2StorageAdaptiveGroups || [];
+          if (prevStorageData.length > 0) {
+            const prevLatestStorage = prevStorageData[0];
+            const prevStorageBytes = (prevLatestStorage.max?.payloadSize || 0) + (prevLatestStorage.max?.metadataSize || 0);
+            previousStorageGB = prevStorageBytes / (1024 * 1024 * 1024);
+          }
+
+          await env.CONFIG_KV.put(
+            previousMonthCacheKey,
+            JSON.stringify({ classAOps: previousClassAOps, classBOps: previousClassBOps, storageGB: previousStorageGB, cachedAt: Date.now() }),
+            { expirationTtl: 31536000 }
+          );
+          console.log(`R2 Storage previous month cached: ${previousClassAOps.toLocaleString()} Class A ops`);
+        }
+      }
+    } catch (prevError) {
+      console.error(`Failed to fetch previous month R2 Storage:`, prevError);
+    }
+  }
+
+  if (now.getDate() >= 28) {
+    const currentMonthCacheKey = `monthly-r2-storage:${accountId}:${currentMonthKey}`;
+    const existingCurrentCache = await env.CONFIG_KV.get(currentMonthCacheKey, 'json');
+    if (!existingCurrentCache) {
+      try {
+        await env.CONFIG_KV.put(
+          currentMonthCacheKey,
+          JSON.stringify({ classAOps: currentClassAOps, classBOps: currentClassBOps, storageGB: currentStorageGB, cachedAt: Date.now() }),
+          { expirationTtl: 31536000 }
+        );
+        console.log(`Cached R2 Storage snapshot for ${currentMonthKey}`);
+      } catch (cacheError) {
+        console.error('Failed to cache R2 Storage snapshot:', cacheError);
+      }
+    }
+  }
+
+  const historicalData = await getHistoricalR2StorageData(env, accountId);
+
+  const timeSeries = [
+    ...historicalData,
+    {
+      month: currentMonthKey,
+      timestamp: currentMonthStart.toISOString(),
+      classAOps: currentClassAOps,
+      classBOps: currentClassBOps,
+      storageGB: currentStorageGB,
+    }
+  ].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+  const timeSeriesMap = new Map();
+  timeSeries.forEach(entry => {
+    timeSeriesMap.set(entry.month, entry);
+  });
+  const deduplicatedTimeSeries = Array.from(timeSeriesMap.values())
+    .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+  return {
+    current: { classAOps: currentClassAOps, classBOps: currentClassBOps, storageGB: currentStorageGB },
+    previous: { classAOps: previousClassAOps, classBOps: previousClassBOps, storageGB: previousStorageGB },
+    timeSeries: deduplicatedTimeSeries,
+  };
+}
+
+async function getHistoricalR2StorageData(env, accountId) {
+  const historicalData = [];
+  
+  try {
+    const listResult = await env.CONFIG_KV.list({ prefix: `monthly-r2-storage:${accountId}:` });
+    
+    for (const key of listResult.keys) {
+      const data = await env.CONFIG_KV.get(key.name, 'json');
+      if (data) {
+        const month = key.name.split(':')[2];
+        const [year, monthNum] = month.split('-');
+        const timestamp = new Date(parseInt(year), parseInt(monthNum) - 1, 1).toISOString();
+        
+        historicalData.push({
+          month,
+          timestamp,
+          classAOps: data.classAOps || 0,
+          classBOps: data.classBOps || 0,
+          storageGB: data.storageGB || 0,
+        });
+      }
+    }
+  } catch (error) {
+    console.error('Error loading historical R2 Storage data:', error);
+  }
+  
+  return historicalData;
+}
+
+/**
  * Check if an IP address is private (RFC1918)
  */
 function isPrivateIP(ip) {
@@ -3286,7 +4058,7 @@ async function fetchMagicBandwidthForAccount(apiKey, accountId, serviceConfig, e
 
   // Define time ranges for current and previous month
   const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-  const previousMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59);
+  const previousMonthEnd = new Date(now.getFullYear(), now.getMonth(), 1);
   
   // Round end time to last completed HOUR for stable P95 calculation
   // This ensures the same data is returned regardless of when during the hour you refresh
@@ -3297,12 +4069,21 @@ async function fetchMagicBandwidthForAccount(apiKey, accountId, serviceConfig, e
     currentMonthEnd.setHours(currentMonthEnd.getHours() - 1);
   }
 
-  // GraphQL query for Magic Transit tunnel traffic
-  // Uses avg.bitRateFiveMinutes which is already in bits/sec (NOT total bits)
-  // Billing methodology: per-tunnel P95, max(ingress, egress) per tunnel, sum all tunnels
-  // Both Magic Transit and Magic WAN use this approach
-  const query = `
-    query GetTunnelBandwidth($accountTag: String!, $datetimeStart: Date!, $datetimeEnd: Date!, $direction: String!) {
+  // Billing-aligned filter configs per service type (matching internal billing SQL)
+  // MT: uses direction filter; WAN: no direction filter, uses onRamp/offRamp
+  const BILLING_FILTERS = {
+    magicTransit: {
+      ingress: 'direction: "ingress", offRamp_in: ["GRE", "IPsec", "CNI"]',
+      egress: 'direction: "egress", onRamp_in: ["GRE", "IPsec", "CNI"]',
+    },
+    magicWan: {
+      ingress: 'onRamp_in: ["GRE", "IPsec", "CNI"], offRamp_neq: "WARP"',
+      egress: 'egressTunnelName_neq: "", ingressTunnelName_neq: "", onRamp_neq: "WARP", offRamp_neq: "WARP"',
+    },
+  };
+
+  const buildBillingQuery = (extraFilters) => `
+    query GetTunnelBandwidth($accountTag: String!, $datetimeStart: Date!, $datetimeEnd: Date!) {
       viewer {
         accounts(filter: {accountTag: $accountTag}) {
           magicTransitTunnelTrafficAdaptiveGroups(
@@ -3310,7 +4091,7 @@ async function fetchMagicBandwidthForAccount(apiKey, accountId, serviceConfig, e
             filter: {
               datetime_geq: $datetimeStart,
               datetime_lt: $datetimeEnd,
-              direction: $direction
+              ${extraFilters}
             }
           ) {
             avg {
@@ -3326,30 +4107,20 @@ async function fetchMagicBandwidthForAccount(apiKey, accountId, serviceConfig, e
     }
   `;
 
-  // Classify tunnels by IP to separate Magic Transit vs Magic WAN
-  const tunnelClassification = await classifyTunnelsByIP(apiKey, accountId, env);
-  
-  // Fetch current month data - use short-term cache to avoid API inconsistency
-  let currentP95Mbps = 0;
-  // v8 cache key - per-tunnel P95 with IP-based classification
-  const currentMonthCacheKey = `current-v8-${serviceType}:${accountId}:${currentMonthKey}:${currentMonthEnd.getHours()}`;
-  const cachedCurrentMonth = await env.CONFIG_KV.get(currentMonthCacheKey, 'json');
-  
-  if (cachedCurrentMonth && (Date.now() - cachedCurrentMonth.cachedAt) < 5 * 60 * 1000) {
-    // Use cached data if less than 5 minutes old
-    currentP95Mbps = cachedCurrentMonth.p95Mbps;
-    console.log(`${serviceType} current month from cache: ${currentP95Mbps.toFixed(6)} Mbps (age: ${Math.round((Date.now() - cachedCurrentMonth.cachedAt) / 1000)}s)`);
-  } else {
-    // Fetch fresh data from API - per-tunnel P95 methodology
-    // 1. Query both ingress and egress
-    // 2. Classify tunnels and filter by serviceType
-    // 3. Calculate P95 for each matching tunnel separately
-    // 4. Take max(ingress P95, egress P95) per tunnel
-    // 5. Sum all tunnel max P95s
-    try {
-      const tunnelDataByDirection = { ingress: [], egress: [] };
-      
-      for (const direction of ['ingress', 'egress']) {
+  const WINDOW_DAYS = 4;
+  const fetchWindowedData = async (filterStr, periodStart, periodEnd) => {
+    const windowMs = WINDOW_DAYS * 24 * 60 * 60 * 1000;
+    const windows = [];
+    let windowStart = new Date(periodStart.getTime());
+    while (windowStart < periodEnd) {
+      const windowEnd = new Date(Math.min(windowStart.getTime() + windowMs, periodEnd.getTime()));
+      windows.push({ start: windowStart, end: windowEnd });
+      windowStart = windowEnd;
+    }
+    
+    const billingQuery = buildBillingQuery(filterStr);
+    const results = await Promise.all(windows.map(async (w) => {
+      try {
         const response = await fetch('https://api.cloudflare.com/client/v4/graphql', {
           method: 'POST',
           headers: {
@@ -3357,230 +4128,189 @@ async function fetchMagicBandwidthForAccount(apiKey, accountId, serviceConfig, e
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
-            query,
+            query: billingQuery,
             variables: {
               accountTag: accountId,
-              datetimeStart: currentMonthStart.toISOString(),
-              datetimeEnd: currentMonthEnd.toISOString(),
-              direction: direction,
+              datetimeStart: w.start.toISOString(),
+              datetimeEnd: w.end.toISOString(),
             },
           }),
         });
-
         if (response.ok) {
           const data = await response.json();
-          if (data.errors) {
-            console.error(`${serviceType} GraphQL errors for account ${accountId}:`, JSON.stringify(data.errors));
-          }
-          tunnelDataByDirection[direction] = data?.data?.viewer?.accounts?.[0]?.magicTransitTunnelTrafficAdaptiveGroups || [];
-          console.log(`${serviceType} (${direction}) received ${tunnelDataByDirection[direction].length} entries`);
-        } else {
-          const errorText = await response.text();
-          console.error(`Failed to fetch ${serviceType} ${direction} for account ${accountId}: ${response.status} - ${errorText}`);
+          return data?.data?.viewer?.accounts?.[0]?.magicTransitTunnelTrafficAdaptiveGroups || [];
         }
+        return [];
+      } catch (err) {
+        console.error(`${serviceType} window fetch error:`, err);
+        return [];
       }
+    }));
+    
+    const allEntries = results.flat();
+    console.log(`${serviceType} fetched ${allEntries.length} entries in ${windows.length} parallel windowed queries`);
+    return allEntries;
+  };
+
+  const calcAccountLevelP95 = (entries, periodStart, periodEnd) => {
+    const totalIntervals = Math.floor((periodEnd.getTime() - periodStart.getTime()) / (5 * 60 * 1000));
+    const intervals = {};
+    const tunnelNames = new Set();
+    for (const entry of entries) {
+      const tunnelName = entry.dimensions?.tunnelName;
+      if (!tunnelName) continue;
+      const classifiedType = tunnelClassification.get(tunnelName);
+      if (classifiedType && classifiedType !== serviceType) continue;
+      const time = entry.dimensions?.datetimeFiveMinutes;
+      const bitRate = entry.avg?.bitRateFiveMinutes || 0;
+      intervals[time] = (intervals[time] || 0) + bitRate;
+      tunnelNames.add(tunnelName);
+    }
+    const samples = [];
+    for (let i = 0; i < totalIntervals; i++) {
+      const intervalTime = new Date(periodStart.getTime() + i * 5 * 60 * 1000)
+        .toISOString()
+        .replace('.000Z', 'Z');
+      samples.push(intervals[intervalTime] || 0);
+    }
+    samples.sort((a, b) => a - b);
+    const p95Index = Math.floor(samples.length * 0.95);
+    const p95Val = samples.length > 0 ? samples[Math.min(p95Index, samples.length - 1)] : 0;
+    return { p95: p95Val, tunnelCount: tunnelNames.size };
+  };
+
+  // Classify tunnels by IP to separate Magic Transit vs Magic WAN
+  const tunnelClassification = await classifyTunnelsByIP(apiKey, accountId, env);
+  
+  // Fetch current month data - use short-term cache to avoid API inconsistency
+  let currentP95Mbps = 0;
+  let currentIngressP95Mbps = 0;
+  let currentEgressP95Mbps = 0;
+  // v13 cache key - windowed pagination + parallel fetches
+  const currentMonthCacheKey = `current-v13-${serviceType}:${accountId}:${currentMonthKey}`;
+  const cachedCurrentMonth = await env.CONFIG_KV.get(currentMonthCacheKey, 'json');
+  
+  const CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes
+  
+  if (cachedCurrentMonth && cachedCurrentMonth.p95Mbps > 0 && (Date.now() - cachedCurrentMonth.cachedAt) < CACHE_TTL_MS) {
+    currentP95Mbps = cachedCurrentMonth.p95Mbps;
+    currentIngressP95Mbps = cachedCurrentMonth.ingressP95Mbps || 0;
+    currentEgressP95Mbps = cachedCurrentMonth.egressP95Mbps || 0;
+    console.log(`${serviceType} current month from cache: ${currentP95Mbps.toFixed(6)} Mbps (age: ${Math.round((Date.now() - cachedCurrentMonth.cachedAt) / 1000)}s)`);
+  } else {
+    // Fetch fresh data using billing-aligned filters with time-windowed pagination
+    // Account-level P95: sum all matching tunnel traffic per 5-min interval, then P95
+    // MT main = ingress P95; WAN main = max(ingress P95, egress P95)
+    try {
+      const filters = BILLING_FILTERS[serviceType];
       
-      // Group data by tunnel name and direction, filtering by service type
-      const tunnelIntervals = { ingress: {}, egress: {} };
-      let skippedTunnels = new Set();
-      for (const direction of ['ingress', 'egress']) {
-        for (const entry of tunnelDataByDirection[direction]) {
-          const tunnelName = entry.dimensions?.tunnelName;
-          if (!tunnelName) continue; // Skip unnamed tunnels
-          
-          // Filter by service type using IP-based classification
-          const classifiedType = tunnelClassification.get(tunnelName);
-          if (classifiedType && classifiedType !== serviceType) {
-            skippedTunnels.add(tunnelName);
-            continue; // Skip tunnels that belong to the other service
-          }
-          
-          const time = entry.dimensions?.datetimeFiveMinutes;
-          const bitRate = entry.avg?.bitRateFiveMinutes || 0;
-          
-          if (!tunnelIntervals[direction][tunnelName]) {
-            tunnelIntervals[direction][tunnelName] = {};
-          }
-          tunnelIntervals[direction][tunnelName][time] = 
-            (tunnelIntervals[direction][tunnelName][time] || 0) + bitRate;
-        }
-      }
-      
-      // Get all unique tunnel names (after filtering)
-      const allTunnelNames = new Set([
-        ...Object.keys(tunnelIntervals.ingress),
-        ...Object.keys(tunnelIntervals.egress)
+      const [ingressData, egressData] = await Promise.all([
+        fetchWindowedData(filters.ingress, currentMonthStart, currentMonthEnd),
+        fetchWindowedData(filters.egress, currentMonthStart, currentMonthEnd),
       ]);
-      if (skippedTunnels.size > 0) {
-        console.log(`${serviceType} skipped tunnels (wrong type): ${[...skippedTunnels].join(', ')}`);
+      
+      const ingressResult = calcAccountLevelP95(ingressData, currentMonthStart, currentMonthEnd);
+      const egressResult = calcAccountLevelP95(egressData, currentMonthStart, currentMonthEnd);
+      
+      currentIngressP95Mbps = ingressResult.p95 / 1e6;
+      currentEgressP95Mbps = egressResult.p95 / 1e6;
+      if (serviceType === 'magicTransit') {
+        currentP95Mbps = currentIngressP95Mbps;
+      } else {
+        currentP95Mbps = Math.max(currentIngressP95Mbps, currentEgressP95Mbps);
       }
-      console.log(`${serviceType} included tunnels: ${[...allTunnelNames].join(', ')}`);
+      const tunnelCount = Math.max(ingressResult.tunnelCount, egressResult.tunnelCount);
+      const dataIntervalCount = ingressData.length + egressData.length;
+      console.log(`${serviceType} FINAL: p95=${currentP95Mbps.toFixed(4)} Mbps (ingress=${currentIngressP95Mbps.toFixed(4)}, egress=${currentEgressP95Mbps.toFixed(4)}, tunnels=${tunnelCount})`);
       
-      // Calculate total intervals for zero-fill
-      const totalIntervals = Math.floor((currentMonthEnd.getTime() - currentMonthStart.getTime()) / (5 * 60 * 1000));
+      // Cache the result - but prefer cached non-zero over fresh zero
+      const freshGotZero = tunnelCount === 0 || currentP95Mbps === 0;
+      const cachedHasValue = cachedCurrentMonth && cachedCurrentMonth.p95Mbps > 0;
       
-      // Helper function to calculate P95 for a tunnel's intervals
-      const calcTunnelP95 = (intervalsMap) => {
-        const samples = [];
-        for (let i = 0; i < totalIntervals; i++) {
-          const intervalTime = new Date(currentMonthStart.getTime() + i * 5 * 60 * 1000)
-            .toISOString()
-            .replace('.000Z', 'Z');
-          samples.push(intervalsMap[intervalTime] || 0);
-        }
-        samples.sort((a, b) => a - b);
-        const p95Index = Math.floor(samples.length * 0.95);
-        return samples.length > 0 ? samples[Math.min(p95Index, samples.length - 1)] : 0;
-      };
-      
-      // Calculate P95 per tunnel, take max of ingress/egress, sum all
-      let totalP95Bps = 0;
-      let tunnelCount = 0;
-      const tunnelDetails = [];
-      
-      for (const tunnelName of allTunnelNames) {
-        const ingressP95 = calcTunnelP95(tunnelIntervals.ingress[tunnelName] || {});
-        const egressP95 = calcTunnelP95(tunnelIntervals.egress[tunnelName] || {});
-        const maxP95 = Math.max(ingressP95, egressP95);
-        totalP95Bps += maxP95;
-        tunnelCount++;
-        tunnelDetails.push({ name: tunnelName, ingress: ingressP95, egress: egressP95, max: maxP95 });
-      }
-      
-      // Log tunnel breakdown
-      tunnelDetails.sort((a, b) => b.max - a.max);
-      for (const t of tunnelDetails.slice(0, 5)) {
-        const dir = t.ingress >= t.egress ? 'I' : 'E';
-        console.log(`  ${t.name}: ${(t.max/1e6).toFixed(4)} Mbps [${dir}]`);
-      }
-      if (tunnelDetails.length > 5) {
-        console.log(`  ... and ${tunnelDetails.length - 5} more tunnels`);
-      }
-      
-      currentP95Mbps = totalP95Bps / 1000000;
-      const dataIntervalCount = tunnelDataByDirection.ingress.length + tunnelDataByDirection.egress.length;
-      console.log(`${serviceType} FINAL P95: ${currentP95Mbps.toFixed(6)} Mbps (${tunnelCount} tunnels, sum of per-tunnel max P95s)`);
-      
-      // Cache the result
-      const shouldUpdateCache = !cachedCurrentMonth || 
-        dataIntervalCount > (cachedCurrentMonth.intervalCount || 0) ||
-        (Date.now() - cachedCurrentMonth.cachedAt) > 15 * 60 * 1000;
-      
-      if (shouldUpdateCache && tunnelCount > 0) {
+      if (freshGotZero && cachedHasValue) {
+        // Fresh fetch returned 0 but we have cached non-zero - keep cached value
+        currentP95Mbps = cachedCurrentMonth.p95Mbps;
+        currentIngressP95Mbps = cachedCurrentMonth.ingressP95Mbps || 0;
+        currentEgressP95Mbps = cachedCurrentMonth.egressP95Mbps || 0;
+        console.log(`${serviceType} fresh fetch returned 0, keeping cached: ${currentP95Mbps.toFixed(6)} Mbps (cached ${Math.round((Date.now() - cachedCurrentMonth.cachedAt) / 1000)}s ago)`);
+      } else if (tunnelCount > 0) {
+        // Got valid data - cache it
+        const cacheData = { 
+          p95Mbps: currentP95Mbps, 
+          ingressP95Mbps: currentIngressP95Mbps,
+          egressP95Mbps: currentEgressP95Mbps,
+          intervalCount: dataIntervalCount, 
+          tunnelCount, 
+          cachedAt: Date.now() 
+        };
         await env.CONFIG_KV.put(
           currentMonthCacheKey,
-          JSON.stringify({ p95Mbps: currentP95Mbps, intervalCount: dataIntervalCount, tunnelCount, cachedAt: Date.now() }),
+          JSON.stringify(cacheData),
           { expirationTtl: 3600 }
         );
         console.log(`${serviceType} cached: ${currentP95Mbps.toFixed(6)} Mbps (${tunnelCount} tunnels)`);
-      } else if (cachedCurrentMonth) {
-        currentP95Mbps = cachedCurrentMonth.p95Mbps;
-        console.log(`${serviceType} keeping cached: ${currentP95Mbps.toFixed(6)} Mbps`);
+      } else {
+        console.log(`${serviceType} no tunnels found and no cache available`);
       }
     } catch (fetchError) {
       console.error(`${serviceType} fetch error for account ${accountId}:`, fetchError);
-      return null;
+      if (cachedCurrentMonth && cachedCurrentMonth.p95Mbps > 0) {
+        currentP95Mbps = cachedCurrentMonth.p95Mbps;
+        currentIngressP95Mbps = cachedCurrentMonth.ingressP95Mbps || 0;
+        currentEgressP95Mbps = cachedCurrentMonth.egressP95Mbps || 0;
+        console.log(`${serviceType} fetch failed, falling back to stale cache: ${currentP95Mbps.toFixed(6)} Mbps`);
+      } else {
+        return null;
+      }
     }
   }
 
   // Get previous month data - first try cache, then fetch from API
-  // Use v3 cache key for per-tunnel methodology with IP-based classification
-  const previousMonthCacheKey = `monthly-v3-${serviceType}:${accountId}:${previousMonthKey}`;
+  // v6 cache key - windowed pagination + parallel fetches
+  const previousMonthCacheKey = `monthly-v6-${serviceType}:${accountId}:${previousMonthKey}`;
   let previousP95Mbps = 0;
+  let previousIngressP95Mbps = 0;
+  let previousEgressP95Mbps = 0;
   
   const cachedPreviousMonth = await env.CONFIG_KV.get(previousMonthCacheKey, 'json');
   if (cachedPreviousMonth) {
     previousP95Mbps = cachedPreviousMonth.p95Mbps || 0;
-    console.log(`${serviceType} previous month from cache: ${previousP95Mbps} Mbps`);
+    previousIngressP95Mbps = cachedPreviousMonth.ingressP95Mbps || 0;
+    previousEgressP95Mbps = cachedPreviousMonth.egressP95Mbps || 0;
+    console.log(`${serviceType} previous month from cache: ${previousP95Mbps} Mbps (ingress: ${previousIngressP95Mbps}, egress: ${previousEgressP95Mbps})`);
   } else {
-    // No cache - fetch previous month from API using per-tunnel methodology
     console.log(`${serviceType} fetching previous month from API for ${previousMonthKey}`);
     try {
-      const prevTunnelDataByDirection = { ingress: [], egress: [] };
+      const filters = BILLING_FILTERS[serviceType];
       
-      for (const direction of ['ingress', 'egress']) {
-        const prevResponse = await fetch('https://api.cloudflare.com/client/v4/graphql', {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${apiKey}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            query,
-            variables: {
-              accountTag: accountId,
-              datetimeStart: previousMonthStart.toISOString(),
-              datetimeEnd: previousMonthEnd.toISOString(),
-              direction: direction,
-            },
-          }),
-        });
-
-        if (prevResponse.ok) {
-          const prevData = await prevResponse.json();
-          prevTunnelDataByDirection[direction] = prevData?.data?.viewer?.accounts?.[0]?.magicTransitTunnelTrafficAdaptiveGroups || [];
-        }
-      }
-      
-      // Group by tunnel and calculate per-tunnel P95, filtering by service type
-      const prevTunnelIntervals = { ingress: {}, egress: {} };
-      for (const direction of ['ingress', 'egress']) {
-        for (const entry of prevTunnelDataByDirection[direction]) {
-          const tunnelName = entry.dimensions?.tunnelName;
-          if (!tunnelName) continue;
-          
-          // Filter by service type using IP-based classification
-          const classifiedType = tunnelClassification.get(tunnelName);
-          if (classifiedType && classifiedType !== serviceType) {
-            continue; // Skip tunnels that belong to the other service
-          }
-          
-          const time = entry.dimensions?.datetimeFiveMinutes;
-          const bitRate = entry.avg?.bitRateFiveMinutes || 0;
-          
-          if (!prevTunnelIntervals[direction][tunnelName]) {
-            prevTunnelIntervals[direction][tunnelName] = {};
-          }
-          prevTunnelIntervals[direction][tunnelName][time] = 
-            (prevTunnelIntervals[direction][tunnelName][time] || 0) + bitRate;
-        }
-      }
-      
-      const prevTunnelNames = new Set([
-        ...Object.keys(prevTunnelIntervals.ingress),
-        ...Object.keys(prevTunnelIntervals.egress)
+      const [prevIngressData, prevEgressData] = await Promise.all([
+        fetchWindowedData(filters.ingress, previousMonthStart, previousMonthEnd),
+        fetchWindowedData(filters.egress, previousMonthStart, previousMonthEnd),
       ]);
       
-      const prevTotalIntervals = Math.floor((previousMonthEnd.getTime() - previousMonthStart.getTime()) / (5 * 60 * 1000));
+      const prevIngressResult = calcAccountLevelP95(prevIngressData, previousMonthStart, previousMonthEnd);
+      const prevEgressResult = calcAccountLevelP95(prevEgressData, previousMonthStart, previousMonthEnd);
       
-      const calcPrevTunnelP95 = (intervalsMap) => {
-        const samples = [];
-        for (let i = 0; i < prevTotalIntervals; i++) {
-          const intervalTime = new Date(previousMonthStart.getTime() + i * 5 * 60 * 1000)
-            .toISOString()
-            .replace('.000Z', 'Z');
-          samples.push(intervalsMap[intervalTime] || 0);
-        }
-        samples.sort((a, b) => a - b);
-        const p95Index = Math.floor(samples.length * 0.95);
-        return samples.length > 0 ? samples[Math.min(p95Index, samples.length - 1)] : 0;
-      };
-      
-      let prevTotalP95Bps = 0;
-      for (const tunnelName of prevTunnelNames) {
-        const ingressP95 = calcPrevTunnelP95(prevTunnelIntervals.ingress[tunnelName] || {});
-        const egressP95 = calcPrevTunnelP95(prevTunnelIntervals.egress[tunnelName] || {});
-        prevTotalP95Bps += Math.max(ingressP95, egressP95);
+      previousIngressP95Mbps = prevIngressResult.p95 / 1e6;
+      previousEgressP95Mbps = prevEgressResult.p95 / 1e6;
+      if (serviceType === 'magicTransit') {
+        previousP95Mbps = previousIngressP95Mbps;
+      } else {
+        previousP95Mbps = Math.max(previousIngressP95Mbps, previousEgressP95Mbps);
       }
+      const prevTunnelCount = Math.max(prevIngressResult.tunnelCount, prevEgressResult.tunnelCount);
+      console.log(`${serviceType} previous month: p95=${previousP95Mbps.toFixed(4)} Mbps (ingress=${previousIngressP95Mbps.toFixed(4)}, egress=${previousEgressP95Mbps.toFixed(4)}, tunnels=${prevTunnelCount})`);
       
-      previousP95Mbps = prevTotalP95Bps / 1000000;
-      console.log(`${serviceType} previous month from API: ${previousP95Mbps.toFixed(6)} Mbps (${prevTunnelNames.size} tunnels)`);
-      
-      // Cache the fetched previous month data
-      if (prevTunnelNames.size > 0) {
+      if (prevTunnelCount > 0) {
         await env.CONFIG_KV.put(
           previousMonthCacheKey,
-          JSON.stringify({ p95Mbps: previousP95Mbps, tunnelCount: prevTunnelNames.size, cachedAt: Date.now() }),
+          JSON.stringify({ 
+            p95Mbps: previousP95Mbps, 
+            ingressP95Mbps: previousIngressP95Mbps,
+            egressP95Mbps: previousEgressP95Mbps,
+            tunnelCount: prevTunnelCount, 
+            cachedAt: Date.now() 
+          }),
           { expirationTtl: 31536000 }
         );
       }
@@ -3591,16 +4321,21 @@ async function fetchMagicBandwidthForAccount(apiKey, accountId, serviceConfig, e
 
   // Cache current month snapshot at end of month (day >= 28)
   if (now.getDate() >= 28) {
-    const currentMonthCacheKey = `monthly-${serviceType}:${accountId}:${currentMonthKey}`;
-    const existingCurrentCache = await env.CONFIG_KV.get(currentMonthCacheKey, 'json');
-    if (!existingCurrentCache) {
+    const snapshotKey = `monthly-v6-${serviceType}:${accountId}:${currentMonthKey}`;
+    const existingSnapshot = await env.CONFIG_KV.get(snapshotKey, 'json');
+    if (!existingSnapshot) {
       try {
         await env.CONFIG_KV.put(
-          currentMonthCacheKey,
-          JSON.stringify({ p95Mbps: currentP95Mbps, cachedAt: Date.now() }),
-          { expirationTtl: 31536000 } // 1 year
+          snapshotKey,
+          JSON.stringify({
+            p95Mbps: currentP95Mbps,
+            ingressP95Mbps: currentIngressP95Mbps,
+            egressP95Mbps: currentEgressP95Mbps,
+            cachedAt: Date.now()
+          }),
+          { expirationTtl: 31536000 }
         );
-        console.log(`Cached ${serviceType} bandwidth snapshot for ${currentMonthKey}: ${currentP95Mbps} Mbps`);
+        console.log(`Cached ${serviceType} snapshot for ${currentMonthKey}: p95=${currentP95Mbps}, ingress=${currentIngressP95Mbps}, egress=${currentEgressP95Mbps}`);
       } catch (cacheError) {
         console.error(`Failed to cache ${serviceType} bandwidth snapshot:`, cacheError);
       }
@@ -3617,6 +4352,8 @@ async function fetchMagicBandwidthForAccount(apiKey, accountId, serviceConfig, e
       month: currentMonthKey,
       timestamp: new Date(now.getFullYear(), now.getMonth(), 1).toISOString(),
       p95Mbps: currentP95Mbps,
+      ingressP95Mbps: currentIngressP95Mbps,
+      egressP95Mbps: currentEgressP95Mbps,
     }
   ].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
 
@@ -3628,9 +4365,20 @@ async function fetchMagicBandwidthForAccount(apiKey, accountId, serviceConfig, e
   const deduplicatedTimeSeries = Array.from(timeSeriesMap.values())
     .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
 
+  // Build return object - always include ingress/egress breakdown (frontend decides what to show)
+  console.log(`${serviceType} RETURN DATA - current: p95=${currentP95Mbps}, ingress=${currentIngressP95Mbps}, egress=${currentEgressP95Mbps}`);
+  console.log(`${serviceType} RETURN DATA - previous: p95=${previousP95Mbps}, ingress=${previousIngressP95Mbps}, egress=${previousEgressP95Mbps}`);
   return {
-    current: { p95Mbps: currentP95Mbps },
-    previous: { p95Mbps: previousP95Mbps },
+    current: { 
+      p95Mbps: currentP95Mbps,
+      ingressP95Mbps: currentIngressP95Mbps,
+      egressP95Mbps: currentEgressP95Mbps,
+    },
+    previous: { 
+      p95Mbps: previousP95Mbps,
+      ingressP95Mbps: previousIngressP95Mbps,
+      egressP95Mbps: previousEgressP95Mbps,
+    },
     timeSeries: deduplicatedTimeSeries,
   };
 }
@@ -3642,20 +4390,30 @@ async function getHistoricalMagicBandwidthData(env, accountId, serviceType) {
   const historicalData = [];
   
   try {
-    const listResult = await env.CONFIG_KV.list({ prefix: `monthly-${serviceType}:${accountId}:` });
+    const prefixes = [
+      `monthly-v6-${serviceType}:${accountId}:`,
+      `monthly-v5-${serviceType}:${accountId}:`,
+    ];
     
-    for (const key of listResult.keys) {
-      const data = await env.CONFIG_KV.get(key.name, 'json');
-      if (data) {
-        const month = key.name.split(':')[2];
-        const [year, monthNum] = month.split('-');
-        const timestamp = new Date(parseInt(year), parseInt(monthNum) - 1, 1).toISOString();
-        
-        historicalData.push({
-          month,
-          timestamp,
-          p95Mbps: data.p95Mbps || 0,
-        });
+    const seen = new Set();
+    for (const prefix of prefixes) {
+      const listResult = await env.CONFIG_KV.list({ prefix });
+      for (const key of listResult.keys) {
+        const data = await env.CONFIG_KV.get(key.name, 'json');
+        if (data) {
+          const month = key.name.split(':')[2];
+          if (seen.has(month)) continue;
+          seen.add(month);
+          const [year, monthNum] = month.split('-');
+          const timestamp = new Date(parseInt(year), parseInt(monthNum) - 1, 1).toISOString();
+          historicalData.push({
+            month,
+            timestamp,
+            p95Mbps: data.p95Mbps || 0,
+            ingressP95Mbps: data.ingressP95Mbps || data.p95Mbps || 0,
+            egressP95Mbps: data.egressP95Mbps || 0,
+          });
+        }
       }
     }
   } catch (error) {
@@ -4165,10 +4923,22 @@ async function preWarmCache(env) {
       }
       
       zonesCount = allZones.length;
+      const zoneMonthKey = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`;
+      try {
+        await env.CONFIG_KV.put(
+          `monthly-zone-count:${zoneMonthKey}`,
+          JSON.stringify({ count: zonesCount, timestamp: new Date().toISOString() }),
+          { expirationTtl: 31536000 }
+        );
+      } catch (e) {
+        console.error('Pre-warm: Failed to store zone count snapshot:', e);
+      }
+      const zonesTimeSeries = await getHistoricalZoneCountData(env, zonesCount);
       zonesData = {
         zones: allZones.map(z => ({ id: z.id, name: z.name, account: z.account })),
         accounts: accountNames,
-        enterprise: zonesCount
+        enterprise: zonesCount,
+        zonesTimeSeries,
       };
       console.log(`Pre-warm: ${zonesCount} zones, ${Object.keys(accountNames).length} accounts cached`);
     } else {
@@ -4508,6 +5278,147 @@ async function preWarmCache(env) {
       console.log('Pre-warm: Zero Trust Seats disabled - skipping fetch');
     }
     
+    // Fetch Workers & Pages if enabled
+    let workersPagesData = null;
+    const wpAccountIds = config?.developerServices?.workersPages?.accountIds || [];
+    if (config?.developerServices?.workersPages?.enabled && wpAccountIds.length > 0) {
+      console.log(`Pre-warm: Fetching Workers & Pages for ${wpAccountIds.length} account(s)...`);
+      const wpConfig = config.developerServices.workersPages;
+      
+      const wpPromises = wpAccountIds.map(accountId =>
+        fetchWorkersPagesForAccount(apiKey, accountId, wpConfig, env)
+          .then(data => ({ accountId, data }))
+      );
+      
+      const wpResults = await Promise.allSettled(wpPromises);
+      const wpData = wpResults
+        .filter(result => result.status === 'fulfilled' && result.value?.data)
+        .map(result => result.value);
+      
+      if (wpData.length > 0) {
+        // Merge timeSeries from all accounts
+        const timeSeriesMap = new Map();
+        wpData.forEach(accountEntry => {
+          if (accountEntry.data.timeSeries) {
+            accountEntry.data.timeSeries.forEach(entry => {
+              const existing = timeSeriesMap.get(entry.month);
+              if (existing) {
+                existing.requests += entry.requests || 0;
+                existing.cpuTimeMs += entry.cpuTimeMs || 0;
+              } else {
+                timeSeriesMap.set(entry.month, {
+                  month: entry.month,
+                  timestamp: entry.timestamp,
+                  requests: entry.requests || 0,
+                  cpuTimeMs: entry.cpuTimeMs || 0,
+                });
+              }
+            });
+          }
+        });
+
+        const mergedTimeSeries = Array.from(timeSeriesMap.values())
+          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+        workersPagesData = {
+          enabled: true,
+          requestsThreshold: wpConfig.requestsThreshold,
+          cpuTimeThreshold: wpConfig.cpuTimeThreshold,
+          current: {
+            requests: wpData.reduce((sum, entry) => sum + entry.data.current.requests, 0),
+            cpuTimeMs: wpData.reduce((sum, entry) => sum + entry.data.current.cpuTimeMs, 0),
+          },
+          previous: {
+            requests: wpData.reduce((sum, entry) => sum + entry.data.previous.requests, 0),
+            cpuTimeMs: wpData.reduce((sum, entry) => sum + entry.data.previous.cpuTimeMs, 0),
+          },
+          timeSeries: mergedTimeSeries,
+          perAccountData: wpData.map(entry => ({
+            accountId: entry.accountId,
+            current: entry.data.current,
+            previous: entry.data.previous,
+            timeSeries: entry.data.timeSeries,
+          })),
+        };
+        console.log(`Pre-warm: Workers & Pages fetched (${workersPagesData.current.requests.toLocaleString()} requests)`);
+      }
+    } else {
+      console.log('Pre-warm: Workers & Pages disabled - skipping fetch');
+    }
+    
+    // Fetch R2 Storage if enabled
+    let r2StorageData = null;
+    const r2AccountIds = config?.developerServices?.r2Storage?.accountIds || [];
+    if (config?.developerServices?.r2Storage?.enabled && r2AccountIds.length > 0) {
+      console.log(`Pre-warm: Fetching R2 Storage for ${r2AccountIds.length} account(s)...`);
+      const r2Config = config.developerServices.r2Storage;
+      
+      const r2Results = await Promise.allSettled(
+        r2AccountIds.map(accountId =>
+          fetchR2StorageForAccount(apiKey, accountId, r2Config, env)
+            .then(data => ({ accountId, data }))
+        )
+      );
+      
+      const r2Data = r2Results
+        .filter(r => r.status === 'fulfilled' && r.value?.data)
+        .map(r => r.value);
+      
+      if (r2Data.length > 0) {
+        const timeSeriesMap = new Map();
+        r2Data.forEach(accountEntry => {
+          if (accountEntry.data.timeSeries) {
+            accountEntry.data.timeSeries.forEach(entry => {
+              const existing = timeSeriesMap.get(entry.month);
+              if (existing) {
+                existing.classAOps += entry.classAOps || 0;
+                existing.classBOps += entry.classBOps || 0;
+                existing.storageGB += entry.storageGB || 0;
+              } else {
+                timeSeriesMap.set(entry.month, {
+                  month: entry.month,
+                  timestamp: entry.timestamp,
+                  classAOps: entry.classAOps || 0,
+                  classBOps: entry.classBOps || 0,
+                  storageGB: entry.storageGB || 0,
+                });
+              }
+            });
+          }
+        });
+
+        const mergedTimeSeries = Array.from(timeSeriesMap.values())
+          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+        r2StorageData = {
+          enabled: true,
+          classAOpsThreshold: r2Config.classAOpsThreshold,
+          classBOpsThreshold: r2Config.classBOpsThreshold,
+          storageThreshold: r2Config.storageThreshold,
+          current: {
+            classAOps: r2Data.reduce((sum, entry) => sum + entry.data.current.classAOps, 0),
+            classBOps: r2Data.reduce((sum, entry) => sum + entry.data.current.classBOps, 0),
+            storageGB: r2Data.reduce((sum, entry) => sum + entry.data.current.storageGB, 0),
+          },
+          previous: {
+            classAOps: r2Data.reduce((sum, entry) => sum + entry.data.previous.classAOps, 0),
+            classBOps: r2Data.reduce((sum, entry) => sum + entry.data.previous.classBOps, 0),
+            storageGB: r2Data.reduce((sum, entry) => sum + entry.data.previous.storageGB, 0),
+          },
+          timeSeries: mergedTimeSeries,
+          perAccountData: r2Data.map(entry => ({
+            accountId: entry.accountId,
+            current: entry.data.current,
+            previous: entry.data.previous,
+            timeSeries: entry.data.timeSeries,
+          })),
+        };
+        console.log(`Pre-warm: R2 Storage fetched (${r2StorageData.current.classAOps.toLocaleString()} Class A ops)`);
+      }
+    } else {
+      console.log('Pre-warm: R2 Storage disabled - skipping fetch');
+    }
+    
     // Fetch Magic Transit and Magic WAN in PARALLEL for performance
     let magicTransitData = null;
     let magicWanData = null;
@@ -4565,11 +5476,15 @@ async function preWarmCache(env) {
                 const existing = timeSeriesMap.get(entry.month);
                 if (existing) {
                   existing.p95Mbps += entry.p95Mbps || 0;
+                  existing.ingressP95Mbps += entry.ingressP95Mbps || 0;
+                  existing.egressP95Mbps += entry.egressP95Mbps || 0;
                 } else {
                   timeSeriesMap.set(entry.month, {
                     month: entry.month,
                     timestamp: entry.timestamp,
                     p95Mbps: entry.p95Mbps || 0,
+                    ingressP95Mbps: entry.ingressP95Mbps || 0,
+                    egressP95Mbps: entry.egressP95Mbps || 0,
                   });
                 }
               });
@@ -4579,15 +5494,25 @@ async function preWarmCache(env) {
           const mergedTimeSeries = Array.from(timeSeriesMap.values())
             .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
 
+          // Build current data - always include ingress/egress breakdown
+          const currentData = {
+            p95Mbps: result.data.reduce((sum, entry) => sum + (entry.data.current?.p95Mbps || 0), 0),
+            ingressP95Mbps: result.data.reduce((sum, entry) => sum + (entry.data.current?.ingressP95Mbps || 0), 0),
+            egressP95Mbps: result.data.reduce((sum, entry) => sum + (entry.data.current?.egressP95Mbps || 0), 0),
+          };
+
+          // Build previous data - always include ingress/egress breakdown
+          const previousData = {
+            p95Mbps: result.data.reduce((sum, entry) => sum + (entry.data.previous?.p95Mbps || 0), 0),
+            ingressP95Mbps: result.data.reduce((sum, entry) => sum + (entry.data.previous?.ingressP95Mbps || 0), 0),
+            egressP95Mbps: result.data.reduce((sum, entry) => sum + (entry.data.previous?.egressP95Mbps || 0), 0),
+          };
+
           const serviceData = {
             enabled: true,
             threshold: result.config.threshold,
-            current: {
-              p95Mbps: result.data.reduce((sum, entry) => sum + entry.data.current.p95Mbps, 0),
-            },
-            previous: {
-              p95Mbps: result.data.reduce((sum, entry) => sum + entry.data.previous.p95Mbps, 0),
-            },
+            current: currentData,
+            previous: previousData,
             timeSeries: mergedTimeSeries,
             perAccountData: result.data.map(entry => ({
               accountId: entry.accountId,
@@ -4623,6 +5548,8 @@ async function preWarmCache(env) {
         ...(pageShieldData && { pageShield: pageShieldData }),
         ...(advancedRateLimitingData && { advancedRateLimiting: advancedRateLimitingData }),
         ...(zeroTrustSeatsData && { zeroTrustSeats: zeroTrustSeatsData }),
+        ...(workersPagesData && { workersPages: workersPagesData }),
+        ...(r2StorageData && { r2Storage: r2StorageData }),
         ...(magicTransitData && { magicTransit: magicTransitData }),
         ...(magicWanData && { magicWan: magicWanData }),
       },

@@ -1,8 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import MetricCard from './MetricCard';
-import UsageChart from './UsageChart';
+import ConsolidatedCard from './ConsolidatedCard';
 import ZonesList from './ZonesList';
-import { RefreshCw, Calendar, AlertCircle, Bell, BellOff, Filter } from 'lucide-react';
+import { RefreshCw, AlertCircle, Bell, BellOff, Filter, ChevronRight, Info } from 'lucide-react';
 import { formatNumber, formatRequests, formatBandwidthTB, formatBytes } from '../utils/formatters';
 import { SERVICE_CATEGORIES, SERVICE_METADATA } from '../constants/services';
 
@@ -13,14 +12,13 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
   const [metrics, setMetrics] = useState(null);
   const [alertsEnabled, setAlertsEnabled] = useState(config?.alertsEnabled || false);
   const [lastChecked, setLastChecked] = useState(null);
-  const [usageViewMode, setUsageViewMode] = useState('current'); // 'current' or 'previous'
-  const [zonesViewMode, setZonesViewMode] = useState('current'); // 'current' or 'previous'
-  const [selectedAccount, setSelectedAccount] = useState('all'); // 'all' or specific accountId
-  const [cacheAge, setCacheAge] = useState(null); // Cache age in seconds
-  const [activeServiceTab, setActiveServiceTab] = useState(SERVICE_CATEGORIES.APPLICATION_SERVICES); // Active service tab
-  const [zoneBreakdownSKU, setZoneBreakdownSKU] = useState('appServices'); // 'appServices' or 'botManagement'
-  const [prewarming, setPrewarming] = useState(false); // Pre-warming cache state
-  const [isInitialSetup, setIsInitialSetup] = useState(false); // Track first-time setup in progress
+  const [selectedAccount, setSelectedAccount] = useState('all');
+  const [cacheAge, setCacheAge] = useState(null);
+  const [activeServiceTab, setActiveServiceTab] = useState(SERVICE_CATEGORIES.APPLICATION_SERVICES);
+  const [selectedProduct, setSelectedProduct] = useState(null);
+  const [zonesViewMode, setZonesViewMode] = useState('current');
+  const [prewarming, setPrewarming] = useState(false);
+  const [isInitialSetup, setIsInitialSetup] = useState(false);
 
   useEffect(() => {
     // Load alerts state from config
@@ -266,12 +264,12 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
 
   const prewarmCache = async () => {
     setPrewarming(true);
-    setLoading(true);
     setError(null);
     
     // For first-time setup: show progress phases during prewarm
     const isFirstTime = !metrics;
     if (isFirstTime) {
+      setLoading(true);
       setIsInitialSetup(true);  // Mark as initial setup
       setLoadingPhase(1);
       
@@ -343,9 +341,22 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
             ...metrics.zeroTrustSeats,
             threshold: config?.zeroTrust?.seats?.threshold || metrics.zeroTrustSeats.threshold,
           } : null,
+          workersPages: metrics.workersPages ? {
+            ...metrics.workersPages,
+            requestsThreshold: config?.developerServices?.workersPages?.requestsThreshold || metrics.workersPages.requestsThreshold,
+            cpuTimeThreshold: config?.developerServices?.workersPages?.cpuTimeThreshold || metrics.workersPages.cpuTimeThreshold,
+          } : null,
+          r2Storage: metrics.r2Storage ? {
+            ...metrics.r2Storage,
+            classAOpsThreshold: config?.developerServices?.r2Storage?.classAOpsThreshold || metrics.r2Storage.classAOpsThreshold,
+            classBOpsThreshold: config?.developerServices?.r2Storage?.classBOpsThreshold || metrics.r2Storage.classBOpsThreshold,
+            storageThreshold: config?.developerServices?.r2Storage?.storageThreshold || metrics.r2Storage.storageThreshold,
+          } : null,
           magicTransit: metrics.magicTransit ? {
             ...metrics.magicTransit,
+            egressEnabled: config?.networkServices?.magicTransit?.egressEnabled || false,
             threshold: config?.networkServices?.magicTransit?.threshold || metrics.magicTransit.threshold,
+            egressThreshold: config?.networkServices?.magicTransit?.egressThreshold || null,
           } : null,
           magicWan: metrics.magicWan ? {
             ...metrics.magicWan,
@@ -462,6 +473,45 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
       }
     }
     
+    // Filter Workers & Pages data for selected account
+    let filteredWorkersPages = null;
+    if (metrics.workersPages && metrics.workersPages.enabled) {
+      const accountWpData = metrics.workersPages.perAccountData?.find(
+        acc => acc.accountId === selectedAccount
+      );
+      
+      if (accountWpData) {
+        filteredWorkersPages = {
+          enabled: true,
+          requestsThreshold: config?.developerServices?.workersPages?.requestsThreshold || metrics.workersPages.requestsThreshold,
+          cpuTimeThreshold: config?.developerServices?.workersPages?.cpuTimeThreshold || metrics.workersPages.cpuTimeThreshold,
+          current: accountWpData.current,
+          previous: accountWpData.previous,
+          timeSeries: accountWpData.timeSeries,
+        };
+      }
+    }
+    
+    // Filter R2 Storage data for selected account
+    let filteredR2Storage = null;
+    if (metrics.r2Storage && metrics.r2Storage.enabled) {
+      const accountR2Data = metrics.r2Storage.perAccountData?.find(
+        acc => acc.accountId === selectedAccount
+      );
+      
+      if (accountR2Data) {
+        filteredR2Storage = {
+          enabled: true,
+          classAOpsThreshold: config?.developerServices?.r2Storage?.classAOpsThreshold || metrics.r2Storage.classAOpsThreshold,
+          classBOpsThreshold: config?.developerServices?.r2Storage?.classBOpsThreshold || metrics.r2Storage.classBOpsThreshold,
+          storageThreshold: config?.developerServices?.r2Storage?.storageThreshold || metrics.r2Storage.storageThreshold,
+          current: accountR2Data.current,
+          previous: accountR2Data.previous,
+          timeSeries: accountR2Data.timeSeries,
+        };
+      }
+    }
+    
     // Filter Magic Transit data for selected account
     let filteredMagicTransit = null;
     if (metrics.magicTransit && metrics.magicTransit.enabled) {
@@ -472,7 +522,9 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
       if (accountMtData) {
         filteredMagicTransit = {
           enabled: true,
+          egressEnabled: config?.networkServices?.magicTransit?.egressEnabled || false,
           threshold: config?.networkServices?.magicTransit?.threshold || metrics.magicTransit.threshold,
+          egressThreshold: config?.networkServices?.magicTransit?.egressThreshold || null,
           current: accountMtData.current,
           previous: accountMtData.previous,
           timeSeries: accountMtData.timeSeries,
@@ -506,6 +558,8 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
         pageShield: filteredPageShield,
         advancedRateLimiting: filteredAdvancedRateLimiting,
         zeroTrustSeats: filteredZeroTrustSeats,
+        workersPages: filteredWorkersPages,
+        r2Storage: filteredR2Storage,
         magicTransit: filteredMagicTransit,
         magicWan: filteredMagicWan,
       },
@@ -602,20 +656,7 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
 
   return (
     <div className="space-y-6 relative">
-      {/* Loading overlay for refresh/prewarm (NOT during initial setup) */}
-      {loading && metrics && !isInitialSetup && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl shadow-2xl p-8 max-w-md">
-            <RefreshCw className="w-12 h-12 text-blue-500 animate-spin mx-auto mb-4" />
-            <p className="text-gray-900 font-semibold text-lg text-center mb-2">
-              Refreshing your data...
-            </p>
-            <p className="text-gray-600 text-center text-sm">
-              Fetching the latest metrics from Cloudflare
-            </p>
-          </div>
-        </div>
-      )}
+      
 
       {/* Account Filter & Alert Toggle */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -737,7 +778,7 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
                 <button
                   key={service.id}
                   type="button"
-                  onClick={() => setActiveServiceTab(service.id)}
+                  onClick={() => { setActiveServiceTab(service.id); setSelectedProduct(null); }}
                   className={`
                     py-4 px-1 border-b-2 font-medium text-sm transition-colors
                     ${isActive 
@@ -755,998 +796,711 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
         </div>
 
         {/* Service Content */}
-        <div className="p-6 bg-gray-50">
+        <div className="bg-gray-50">
           {activeServiceTab === SERVICE_CATEGORIES.APPLICATION_SERVICES && renderApplicationServices()}
-          {activeServiceTab === SERVICE_CATEGORIES.ZERO_TRUST && renderZeroTrustServices()}
-          {activeServiceTab === SERVICE_CATEGORIES.NETWORK_SERVICES && renderNetworkServices()}
-          {activeServiceTab === SERVICE_CATEGORIES.DEVELOPER_SERVICES && renderPlaceholderService('Developer Services')}
+          {activeServiceTab === SERVICE_CATEGORIES.CLOUDFLARE_ONE && renderCloudflareOne()}
+          {activeServiceTab === SERVICE_CATEGORIES.DEVELOPER_PLATFORM && renderDeveloperPlatform()}
         </div>
       </div>
     </div>
   );
 
-  // Render Application Services Tab Content
-  function renderApplicationServices() {
+  function renderSidebarLayout(sidebarItems, renderContent) {
+    const activeProduct = selectedProduct || (sidebarItems.length > 0 ? sidebarItems[0].id : null);
+
     return (
-      <>
-      {/* Usage Metrics Section */}
-      <div className="bg-white border border-gray-200 rounded-xl p-6 mb-10">
-        <div className="bg-gradient-to-r from-slate-700 to-slate-600 rounded-lg px-6 py-4 mb-6">
-          <div className="flex items-center justify-between">
-            <h3 className="text-2xl font-semibold text-white tracking-tight">Usage Metrics</h3>
-            
-            {/* Toggle */}
-            <div className="flex items-center bg-white rounded-lg p-1 shadow-sm">
-              <button
-                onClick={() => setUsageViewMode('current')}
-                className={`flex items-center space-x-2 px-4 py-2 rounded-md transition-all font-medium text-sm ${
-                  usageViewMode === 'current'
-                    ? 'bg-blue-600 text-white shadow-sm'
-                    : 'text-gray-600 hover:bg-gray-50'
-                }`}
-              >
-                <Calendar className="w-4 h-4" />
-                <span>Current Month</span>
-              </button>
-              <button
-                onClick={() => setUsageViewMode('previous')}
-                className={`flex items-center space-x-2 px-4 py-2 rounded-md transition-all font-medium text-sm ${
-                  usageViewMode === 'previous'
-                    ? 'bg-blue-600 text-white shadow-sm'
-                    : 'text-gray-600 hover:bg-gray-50'
-                }`}
-              >
-                <Calendar className="w-4 h-4" />
-                <span>Last Month</span>
-              </button>
-            </div>
-          </div>
+      <div className="flex min-h-[500px]">
+        <div className="w-64 border-r border-gray-200 bg-white flex-shrink-0 pt-6">
+          <nav className="py-2">
+            {sidebarItems.map((item) => {
+              const isActive = activeProduct === item.id;
+              return (
+                <button
+                  key={item.id}
+                  onClick={() => setSelectedProduct(item.id)}
+                  className={`w-full flex items-center justify-between px-4 py-3 text-sm transition-colors ${
+                    isActive
+                      ? 'bg-blue-50 text-blue-700 border-r-2 border-blue-600 font-medium'
+                      : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+                  }`}
+                >
+                  <span>{item.label}</span>
+                  <ChevronRight className={`w-4 h-4 ${isActive ? 'text-blue-600' : 'text-gray-400'}`} />
+                </button>
+              );
+            })}
+          </nav>
         </div>
-        
-        {/* App Services Core Metrics - Only show if enabled */}
-        {config?.applicationServices?.core?.enabled !== false && metrics?.current && (
-          <>
-            <h4 className="text-lg font-semibold text-gray-900 mb-4 mt-6">App Services Core</h4>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-              <MetricCard
-                title="Enterprise Zones"
-                value={displayZones?.enterprise || 0}
-                formatted={formatNumber(displayZones?.enterprise || 0)}
-                threshold={config?.applicationServices?.core?.thresholdZones || config.thresholdZones}
-                percentage={calculatePercentage(displayZones?.enterprise || 0, config?.applicationServices?.core?.thresholdZones || config.thresholdZones)}
-                icon="zones"
-                unit="zones"
-                zoneBreakdown={displayMetrics?.previousMonthZoneBreakdown}
-                primaryZones={config?.applicationServices?.core?.primaryZones || config.primaryZones}
-                secondaryZones={config?.applicationServices?.core?.secondaryZones || config.secondaryZones}
-              />
-
-              <MetricCard
-                title="HTTP Requests"
-                value={usageViewMode === 'current' 
-                  ? displayMetrics?.current.requests || 0 
-                  : displayMetrics?.previous.requests || 0}
-                formatted={formatRequests(usageViewMode === 'current' 
-                  ? displayMetrics?.current.requests || 0 
-                  : displayMetrics?.previous.requests || 0)}
-                threshold={config?.applicationServices?.core?.thresholdRequests || config.thresholdRequests}
-                percentage={calculatePercentage(usageViewMode === 'current' 
-                  ? displayMetrics?.current.requests || 0 
-                  : displayMetrics?.previous.requests || 0, config?.applicationServices?.core?.thresholdRequests || config.thresholdRequests)}
-                icon="requests"
-                unit="M"
-                confidence={usageViewMode === 'current' ? displayMetrics?.current?.confidence?.requests : null}
-                summaryBadge={(usageViewMode === 'current' ? displayMetrics?.current : displayMetrics?.previous)?.totalRequests != null ? (() => {
-                  const http = usageViewMode === 'current' ? displayMetrics.current : displayMetrics.previous;
-                  return (
-                    <div className="bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-xs">
-                      <div className="flex items-center justify-between space-x-2 mb-1">
-                        <span className="text-gray-600">Total:</span>
-                        <span className="font-semibold text-gray-900">
-                          {formatRequests(http.totalRequests)}
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between space-x-2">
-                        <span className="text-gray-600">Blocked:</span>
-                        <span className="font-semibold text-gray-900">
-                          {formatRequests(http.blockedRequests || 0)}
-                        </span>
-                      </div>
-                    </div>
-                  );
-                })() : null}
-              />
-              
-              <MetricCard
-                title="Data Transfer"
-                value={usageViewMode === 'current' ? displayMetrics?.current.bytes || 0 : displayMetrics?.previous.bytes || 0}
-                formatted={formatBandwidthTB(usageViewMode === 'current' ? displayMetrics?.current.bytes || 0 : displayMetrics?.previous.bytes || 0)}
-                threshold={config?.applicationServices?.core?.thresholdBandwidth || config.thresholdBandwidth}
-                percentage={calculatePercentage(usageViewMode === 'current' ? displayMetrics?.current.bytes || 0 : displayMetrics?.previous.bytes || 0, config?.applicationServices?.core?.thresholdBandwidth || config.thresholdBandwidth)}
-                icon="bandwidth"
-                unit="TB"
-                confidence={usageViewMode === 'current' ? displayMetrics?.current?.confidence?.bytes : null}
-                confidenceMetricType="HTTP Requests (measuring bytes)"
-                summaryBadge={(usageViewMode === 'current' ? displayMetrics?.current : displayMetrics?.previous)?.totalBytes != null ? (() => {
-                  const httpBytes = usageViewMode === 'current' ? displayMetrics.current : displayMetrics.previous;
-                  return (
-                    <div className="bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-xs">
-                      <div className="flex items-center justify-between space-x-2 mb-1">
-                        <span className="text-gray-600">Total:</span>
-                        <span className="font-semibold text-gray-900">
-                          {formatBandwidthTB(httpBytes.totalBytes)}
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between space-x-2">
-                        <span className="text-gray-600">Blocked:</span>
-                        <span className="font-semibold text-gray-900">
-                          {formatBandwidthTB(httpBytes.blockedBytes || 0)}
-                        </span>
-                      </div>
-                    </div>
-                  );
-                })() : null}
-              />
-
-              <MetricCard
-                title="DNS Queries"
-                value={usageViewMode === 'current' ? displayMetrics?.current.dnsQueries || 0 : displayMetrics?.previous.dnsQueries || 0}
-                formatted={formatRequests(usageViewMode === 'current' ? displayMetrics?.current.dnsQueries || 0 : displayMetrics?.previous.dnsQueries || 0)}
-                threshold={config?.applicationServices?.core?.thresholdDnsQueries || config.thresholdDnsQueries}
-                percentage={calculatePercentage(usageViewMode === 'current' ? displayMetrics?.current.dnsQueries || 0 : displayMetrics?.previous.dnsQueries || 0, config?.applicationServices?.core?.thresholdDnsQueries || config.thresholdDnsQueries)}
-                icon="dns"
-                unit="M"
-                confidence={usageViewMode === 'current' ? displayMetrics?.current?.confidence?.dnsQueries : null}
-                confidenceMetricType="DNS Queries"
-              />
-            </div>
-          </>
-        )}
-
-        {/* Add-ons Section - Integrated into Usage Metrics */}
-        {(displayMetrics?.botManagement?.enabled || 
-          displayMetrics?.apiShield?.enabled || 
-          displayMetrics?.pageShield?.enabled || 
-          displayMetrics?.advancedRateLimiting?.enabled) && (
-          <>
-            <h4 className="text-lg font-semibold text-gray-900 mb-4 mt-6">Add-ons</h4>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {/* Bot Management */}
-              {displayMetrics?.botManagement && displayMetrics.botManagement.enabled && (
-                <MetricCard
-                  title="Bot Management"
-                  subtitle="Likely Human Requests"
-                  value={usageViewMode === 'current' 
-                    ? displayMetrics.botManagement.current?.likelyHuman || 0
-                    : displayMetrics.botManagement.previous?.likelyHuman || 0}
-                  formatted={formatRequests(usageViewMode === 'current' 
-                    ? displayMetrics.botManagement.current?.likelyHuman || 0
-                    : displayMetrics.botManagement.previous?.likelyHuman || 0)}
-                  threshold={displayMetrics.botManagement.threshold}
-                  percentage={calculatePercentage(
-                    usageViewMode === 'current' 
-                      ? displayMetrics.botManagement.current?.likelyHuman || 0
-                      : displayMetrics.botManagement.previous?.likelyHuman || 0,
-                    displayMetrics.botManagement.threshold
-                  )}
-                  icon="traffic"
-                  unit="M"
-                  confidence={usageViewMode === 'current' ? displayMetrics.botManagement.current?.confidence : null}
-                  confidenceMetricType="Likely Human Requests"
-                />
-              )}
-
-              {/* API Shield */}
-              {displayMetrics?.apiShield && displayMetrics.apiShield.enabled && (
-                <MetricCard
-                  title="API Shield"
-                  subtitle="HTTP Requests"
-                  value={usageViewMode === 'current' 
-                    ? displayMetrics.apiShield.current?.requests || 0
-                    : displayMetrics.apiShield.previous?.requests || 0}
-                  formatted={formatRequests(usageViewMode === 'current' 
-                    ? displayMetrics.apiShield.current?.requests || 0
-                    : displayMetrics.apiShield.previous?.requests || 0)}
-                  threshold={displayMetrics.apiShield.threshold}
-                  percentage={calculatePercentage(
-                    usageViewMode === 'current' 
-                      ? displayMetrics.apiShield.current?.requests || 0
-                      : displayMetrics.apiShield.previous?.requests || 0,
-                    displayMetrics.apiShield.threshold
-                  )}
-                  icon="requests"
-                  unit="M"
-                  confidence={usageViewMode === 'current' ? displayMetrics.apiShield.current?.confidence : null}
-                  isZoneFiltered={true}
-                />
-              )}
-
-              {/* Page Shield */}
-              {displayMetrics?.pageShield && displayMetrics.pageShield.enabled && (
-                <MetricCard
-                  title="Page Shield"
-                  subtitle="HTTP Requests"
-                  value={usageViewMode === 'current' 
-                    ? displayMetrics.pageShield.current?.requests || 0
-                    : displayMetrics.pageShield.previous?.requests || 0}
-                  formatted={formatRequests(usageViewMode === 'current' 
-                    ? displayMetrics.pageShield.current?.requests || 0
-                    : displayMetrics.pageShield.previous?.requests || 0)}
-                  threshold={displayMetrics.pageShield.threshold}
-                  percentage={calculatePercentage(
-                    usageViewMode === 'current' 
-                      ? displayMetrics.pageShield.current?.requests || 0
-                      : displayMetrics.pageShield.previous?.requests || 0,
-                    displayMetrics.pageShield.threshold
-                  )}
-                  icon="requests"
-                  unit="M"
-                  confidence={usageViewMode === 'current' ? displayMetrics.pageShield.current?.confidence : null}
-                  isZoneFiltered={true}
-                />
-              )}
-
-              {/* Advanced Rate Limiting */}
-              {displayMetrics?.advancedRateLimiting && displayMetrics.advancedRateLimiting.enabled && (
-                <MetricCard
-                  title="Advanced Rate Limiting"
-                  subtitle="HTTP Requests"
-                  value={usageViewMode === 'current' 
-                    ? displayMetrics.advancedRateLimiting.current?.requests || 0
-                    : displayMetrics.advancedRateLimiting.previous?.requests || 0}
-                  formatted={formatRequests(usageViewMode === 'current' 
-                    ? displayMetrics.advancedRateLimiting.current?.requests || 0
-                    : displayMetrics.advancedRateLimiting.previous?.requests || 0)}
-                  threshold={displayMetrics.advancedRateLimiting.threshold}
-                  percentage={calculatePercentage(
-                    usageViewMode === 'current' 
-                      ? displayMetrics.advancedRateLimiting.current?.requests || 0
-                      : displayMetrics.advancedRateLimiting.previous?.requests || 0,
-                    displayMetrics.advancedRateLimiting.threshold
-                  )}
-                  icon="requests"
-                  unit="M"
-                  confidence={usageViewMode === 'current' ? displayMetrics.advancedRateLimiting.current?.confidence : null}
-                  isZoneFiltered={true}
-                />
-              )}
-            </div>
-          </>
-        )}
+        <div className="flex-1 p-6 overflow-auto">
+          {renderContent(activeProduct)}
+        </div>
       </div>
-
-      {/* Breakdown by Zones Section - Show if any zone-level SKU is enabled */}
-      {((config?.applicationServices?.core?.enabled !== false && displayZones?.zones && displayZones.zones.length > 0) || 
-        (displayMetrics?.botManagement && displayMetrics.botManagement.enabled) ||
-        (displayMetrics?.apiShield && displayMetrics.apiShield.enabled) ||
-        (displayMetrics?.pageShield && displayMetrics.pageShield.enabled) ||
-        (displayMetrics?.advancedRateLimiting && displayMetrics.advancedRateLimiting.enabled)) && (
-        <div className="bg-white border border-gray-200 rounded-xl p-6 mb-10">
-          <div className="bg-gradient-to-r from-slate-700 to-slate-600 rounded-lg px-6 py-4 mb-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="text-2xl font-semibold text-white tracking-tight">Breakdown by Zones</h3>
-                <p className="text-slate-200 text-sm mt-1">
-                  View detailed metrics for each enterprise zone
-                </p>
-              </div>
-              
-              {/* Zone View Toggle */}
-              <div className="flex items-center bg-white rounded-lg p-1 shadow-sm">
-                <button
-                  onClick={() => setZonesViewMode('current')}
-                  className={`flex items-center space-x-2 px-4 py-2 rounded-md transition-all font-medium text-sm ${
-                    zonesViewMode === 'current'
-                      ? 'bg-blue-600 text-white shadow-sm'
-                      : 'text-gray-600 hover:bg-gray-50'
-                  }`}
-                >
-                  <Calendar className="w-4 h-4" />
-                  <span>Current Month</span>
-                </button>
-                <button
-                  onClick={() => setZonesViewMode('previous')}
-                  className={`flex items-center space-x-2 px-4 py-2 rounded-md transition-all font-medium text-sm ${
-                    zonesViewMode === 'previous'
-                      ? 'bg-blue-600 text-white shadow-sm'
-                      : 'text-gray-600 hover:bg-gray-50'
-                  }`}
-                >
-                  <Calendar className="w-4 h-4" />
-                  <span>Last Month</span>
-                </button>
-              </div>
-            </div>
-          </div>
-
-          {/* SKU Selector Dropdown */}
-          <div className="mb-6">
-            <select
-              value={zoneBreakdownSKU}
-              onChange={(e) => setZoneBreakdownSKU(e.target.value)}
-              className="w-full md:w-64 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
-            >
-              {config?.applicationServices?.core?.enabled !== false && (
-                <option value="appServices">App Services</option>
-              )}
-              {displayMetrics?.botManagement && displayMetrics.botManagement.enabled && (
-                <option value="botManagement">Bot Management</option>
-              )}
-              {displayMetrics?.apiShield && displayMetrics.apiShield.enabled && (
-                <option value="apiShield">API Shield</option>
-              )}
-              {displayMetrics?.pageShield && displayMetrics.pageShield.enabled && (
-                <option value="pageShield">Page Shield</option>
-              )}
-              {displayMetrics?.advancedRateLimiting && displayMetrics.advancedRateLimiting.enabled && (
-                <option value="advancedRateLimiting">Advanced Rate Limiting</option>
-              )}
-            </select>
-          </div>
-          
-          {/* App Services Breakdown */}
-          {zoneBreakdownSKU === 'appServices' && (
-            <>
-              {!displayZones?.zones || displayZones.zones.length === 0 ? (
-                <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6 text-center">
-                  <p className="text-sm text-yellow-800">
-                    No App Services zone data available.
-                  </p>
-                </div>
-              ) : (
-                <>
-                  {zonesViewMode === 'current' && (
-                    <div className="mt-4 mb-4 bg-blue-50 border-l-4 border-l-blue-500 rounded-lg p-4">
-                      <p className="text-sm text-gray-700">
-                        <span className="font-semibold">Note:</span> Primary/secondary classifications are based on previous month's usage (zones with ≥50GB are Primary).
-                      </p>
-                    </div>
-                  )}
-                  
-                  <ZonesList 
-                    zones={displayZones.zones} 
-                    zoneMetrics={zonesViewMode === 'current' 
-                      ? displayMetrics?.zoneBreakdown?.zones 
-                      : displayMetrics?.previousMonthZoneBreakdown?.zones
-                    }
-                    usePreviousClassification={zonesViewMode === 'current'}
-                    previousMonthMetrics={displayMetrics?.previousMonthZoneBreakdown?.zones}
-                  />
-                </>
-              )}
-            </>
-          )}
-
-          {/* Bot Management Breakdown */}
-          {zoneBreakdownSKU === 'botManagement' && (
-            <>
-              {(() => {
-                const botZones = zonesViewMode === 'current' 
-                  ? displayMetrics?.botManagement?.current?.zones 
-                  : displayMetrics?.botManagement?.previous?.zones;
-                
-                if (!botZones || botZones.length === 0) {
-                  return (
-                    <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6 text-center">
-                      <p className="text-sm text-yellow-800">
-                        No Bot Management zone data available for {zonesViewMode === 'current' ? 'current' : 'previous'} month.
-                      </p>
-                    </div>
-                  );
-                }
-                
-                // Deduplicate zones by zoneId
-                const uniqueZones = botZones.reduce((acc, zone) => {
-                  const id = zone.zoneId;
-                  if (!acc[id]) {
-                    acc[id] = zone;
-                  }
-                  return acc;
-                }, {});
-                const deduplicatedZones = Object.values(uniqueZones);
-                
-                return (
-                  <div className="bg-gray-50 border border-gray-200 rounded-lg overflow-hidden">
-                    <div className="max-h-96 overflow-y-auto">
-                      <table className="min-w-full divide-y divide-gray-200">
-                        <thead className="bg-gray-100 sticky top-0 z-10">
-                          <tr>
-                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                              Zone
-                            </th>
-                            <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                              Likely Human Requests
-                            </th>
-                          </tr>
-                        </thead>
-                        <tbody className="bg-white divide-y divide-gray-200">
-                          {deduplicatedZones.map((zone, index) => (
-                            <tr key={zone.zoneId || index} className="hover:bg-gray-50">
-                              <td className="px-6 py-4 whitespace-nowrap">
-                                <div className="text-sm font-medium text-gray-900">
-                                  {zone.zoneName || zone.zoneId || 'Unknown Zone'}
-                                </div>
-                              </td>
-                              <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-900 font-medium">
-                                {formatRequests(zone.likelyHuman || 0)}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                );
-              })()}
-            </>
-          )}
-
-          {/* API Shield Breakdown */}
-          {zoneBreakdownSKU === 'apiShield' && (
-            <>
-              {(() => {
-                const addonZones = zonesViewMode === 'current' 
-                  ? displayMetrics?.apiShield?.current?.zones 
-                  : displayMetrics?.apiShield?.previous?.zones;
-                
-                if (!addonZones || addonZones.length === 0) {
-                  return (
-                    <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6 text-center">
-                      <p className="text-sm text-yellow-800">
-                        No API Shield zone data available for {zonesViewMode === 'current' ? 'current' : 'previous'} month.
-                      </p>
-                    </div>
-                  );
-                }
-                
-                return (
-                  <div className="bg-gray-50 border border-gray-200 rounded-lg overflow-hidden">
-                    <div className="max-h-96 overflow-y-auto">
-                      <table className="min-w-full divide-y divide-gray-200">
-                        <thead className="bg-gray-100 sticky top-0 z-10">
-                          <tr>
-                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                              Zone
-                            </th>
-                            <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                              HTTP Requests
-                            </th>
-                          </tr>
-                        </thead>
-                        <tbody className="bg-white divide-y divide-gray-200">
-                          {addonZones.map((zone, index) => (
-                            <tr key={zone.zoneId || index} className="hover:bg-gray-50">
-                              <td className="px-6 py-4 whitespace-nowrap">
-                                <div className="text-sm font-medium text-gray-900">
-                                  {zone.zoneName || zone.zoneId || 'Unknown Zone'}
-                                </div>
-                              </td>
-                              <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-900 font-medium">
-                                {formatRequests(zone.requests || 0)}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                );
-              })()}
-            </>
-          )}
-
-          {/* Page Shield Breakdown */}
-          {zoneBreakdownSKU === 'pageShield' && (
-            <>
-              {(() => {
-                const addonZones = zonesViewMode === 'current' 
-                  ? displayMetrics?.pageShield?.current?.zones 
-                  : displayMetrics?.pageShield?.previous?.zones;
-                
-                if (!addonZones || addonZones.length === 0) {
-                  return (
-                    <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6 text-center">
-                      <p className="text-sm text-yellow-800">
-                        No Page Shield zone data available for {zonesViewMode === 'current' ? 'current' : 'previous'} month.
-                      </p>
-                    </div>
-                  );
-                }
-                
-                return (
-                  <div className="bg-gray-50 border border-gray-200 rounded-lg overflow-hidden">
-                    <div className="max-h-96 overflow-y-auto">
-                      <table className="min-w-full divide-y divide-gray-200">
-                        <thead className="bg-gray-100 sticky top-0 z-10">
-                          <tr>
-                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                              Zone
-                            </th>
-                            <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                              HTTP Requests
-                            </th>
-                          </tr>
-                        </thead>
-                        <tbody className="bg-white divide-y divide-gray-200">
-                          {addonZones.map((zone, index) => (
-                            <tr key={zone.zoneId || index} className="hover:bg-gray-50">
-                              <td className="px-6 py-4 whitespace-nowrap">
-                                <div className="text-sm font-medium text-gray-900">
-                                  {zone.zoneName || zone.zoneId || 'Unknown Zone'}
-                                </div>
-                              </td>
-                              <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-900 font-medium">
-                                {formatRequests(zone.requests || 0)}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                );
-              })()}
-            </>
-          )}
-
-          {/* Advanced Rate Limiting Breakdown */}
-          {zoneBreakdownSKU === 'advancedRateLimiting' && (
-            <>
-              {(() => {
-                const addonZones = zonesViewMode === 'current' 
-                  ? displayMetrics?.advancedRateLimiting?.current?.zones 
-                  : displayMetrics?.advancedRateLimiting?.previous?.zones;
-                
-                if (!addonZones || addonZones.length === 0) {
-                  return (
-                    <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6 text-center">
-                      <p className="text-sm text-yellow-800">
-                        No Advanced Rate Limiting zone data available for {zonesViewMode === 'current' ? 'current' : 'previous'} month.
-                      </p>
-                    </div>
-                  );
-                }
-                
-                return (
-                  <div className="bg-gray-50 border border-gray-200 rounded-lg overflow-hidden">
-                    <div className="max-h-96 overflow-y-auto">
-                      <table className="min-w-full divide-y divide-gray-200">
-                        <thead className="bg-gray-100 sticky top-0 z-10">
-                          <tr>
-                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                              Zone
-                            </th>
-                            <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                              HTTP Requests
-                            </th>
-                          </tr>
-                        </thead>
-                        <tbody className="bg-white divide-y divide-gray-200">
-                          {addonZones.map((zone, index) => (
-                            <tr key={zone.zoneId || index} className="hover:bg-gray-50">
-                              <td className="px-6 py-4 whitespace-nowrap">
-                                <div className="text-sm font-medium text-gray-900">
-                                  {zone.zoneName || zone.zoneId || 'Unknown Zone'}
-                                </div>
-                              </td>
-                              <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-900 font-medium">
-                                {formatRequests(zone.requests || 0)}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                );
-              })()}
-            </>
-          )}
-        </div>
-      )}
-
-      {/* Usage Charts - 2 Column Layout */}
-      {displayMetrics?.timeSeries && displayMetrics.timeSeries.length > 0 && (
-        <div className="bg-white border border-gray-200 rounded-xl p-6 mb-10">
-          <div className="bg-gradient-to-r from-slate-700 to-slate-600 rounded-lg px-6 py-4 mb-6">
-            <h3 className="text-2xl font-semibold text-white tracking-tight">Monthly Usage Trends</h3>
-            <p className="text-slate-200 text-sm mt-1">
-              Historical monthly aggregated data for Enterprise zones only
-            </p>
-          </div>
-          
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <UsageChart
-              data={displayMetrics.timeSeries}
-              dataKey="requests"
-              title="HTTP Requests"
-              color="#2563eb"
-              threshold={config?.applicationServices?.core?.thresholdRequests || config?.thresholdRequests}
-              yAxisLabel="HTTP Requests"
-            />
-            
-            <UsageChart
-              data={displayMetrics.timeSeries}
-              dataKey="bytes"
-              title="Data Transfer"
-              color="#10b981"
-              formatter={formatBytes}
-              threshold={config?.applicationServices?.core?.thresholdBandwidth || config?.thresholdBandwidth}
-              yAxisLabel="Data Transfer"
-            />
-
-            <UsageChart
-              data={displayMetrics.timeSeries}
-              dataKey="dnsQueries"
-              title="DNS Queries"
-              color="#f59e0b"
-              threshold={config?.applicationServices?.core?.thresholdDnsQueries || config?.thresholdDnsQueries}
-              yAxisLabel="DNS Queries"
-            />
-
-            {/* Bot Management Chart */}
-            {displayMetrics?.botManagement?.enabled && 
-             displayMetrics.botManagement.timeSeries && 
-             displayMetrics.botManagement.timeSeries.length > 0 && (
-              <UsageChart
-                data={displayMetrics.botManagement.timeSeries}
-                dataKey="likelyHuman"
-                title="Bot Management: Likely Human Requests"
-                color="#9333ea"
-                threshold={displayMetrics.botManagement.threshold}
-                yAxisLabel="Likely Human Requests"
-              />
-            )}
-
-            {/* API Shield Chart */}
-            {displayMetrics?.apiShield?.enabled && 
-             displayMetrics.apiShield.timeSeries && 
-             displayMetrics.apiShield.timeSeries.length > 0 && (
-              <UsageChart
-                data={displayMetrics.apiShield.timeSeries}
-                dataKey="requests"
-                title="API Shield: HTTP Requests"
-                color="#06b6d4"
-                threshold={displayMetrics.apiShield.threshold}
-                yAxisLabel="HTTP Requests"
-              />
-            )}
-
-            {/* Page Shield Chart */}
-            {displayMetrics?.pageShield?.enabled && 
-             displayMetrics.pageShield.timeSeries && 
-             displayMetrics.pageShield.timeSeries.length > 0 && (
-              <UsageChart
-                data={displayMetrics.pageShield.timeSeries}
-                dataKey="requests"
-                title="Page Shield: HTTP Requests"
-                color="#ec4899"
-                threshold={displayMetrics.pageShield.threshold}
-                yAxisLabel="HTTP Requests"
-              />
-            )}
-
-            {/* Advanced Rate Limiting Chart */}
-            {displayMetrics?.advancedRateLimiting?.enabled && 
-             displayMetrics.advancedRateLimiting.timeSeries && 
-             displayMetrics.advancedRateLimiting.timeSeries.length > 0 && (
-              <UsageChart
-                data={displayMetrics.advancedRateLimiting.timeSeries}
-                dataKey="requests"
-                title="Advanced Rate Limiting: HTTP Requests"
-                color="#f97316"
-                threshold={displayMetrics.advancedRateLimiting.threshold}
-                yAxisLabel="HTTP Requests"
-              />
-            )}
-          </div>
-        </div>
-      )}
-      </>
     );
   }
 
-  // Render Zero Trust Services Tab Content
-  function renderZeroTrustServices() {
-    // Check if Zero Trust Seats is enabled and has data
-    const hasZeroTrustSeats = displayMetrics?.zeroTrustSeats && displayMetrics.zeroTrustSeats.enabled;
-    
-    if (!hasZeroTrustSeats) {
+  function renderApplicationServices() {
+    const sidebarItems = [];
+
+    if (config?.applicationServices?.core?.enabled !== false && metrics?.current) {
+      sidebarItems.push({ id: 'enterpriseZones', label: 'Enterprise Zones' });
+      sidebarItems.push({ id: 'appServices', label: 'Enterprise Core' });
+      sidebarItems.push({ id: 'dns', label: 'DNS' });
+    }
+    if (displayMetrics?.magicTransit?.enabled) {
+      sidebarItems.push({ id: 'magicTransit', label: 'Magic Transit' });
+    }
+    if (displayMetrics?.botManagement?.enabled) {
+      sidebarItems.push({ id: 'botManagement', label: 'Bot Management' });
+    }
+    if (displayMetrics?.apiShield?.enabled) {
+      sidebarItems.push({ id: 'apiShield', label: 'API Shield' });
+    }
+    if (displayMetrics?.pageShield?.enabled) {
+      sidebarItems.push({ id: 'pageShield', label: 'Page Shield' });
+    }
+    if (displayMetrics?.advancedRateLimiting?.enabled) {
+      sidebarItems.push({ id: 'advancedRateLimiting', label: 'Advanced Rate Limiting' });
+    }
+
+    if (sidebarItems.length === 0) {
       return (
         <div className="text-center py-20">
-          <div className="text-gray-400 mb-4">
-            <AlertCircle className="w-16 h-16 mx-auto" />
-          </div>
-          <h3 className="text-xl font-semibold text-gray-700 mb-2">
-            Zero Trust Services
-          </h3>
-          <p className="text-sm text-gray-500 max-w-md mx-auto">
-            Zero Trust Seats is not configured. Go to Settings → Zero Trust Services to enable it and select accounts.
-          </p>
+          <AlertCircle className="w-16 h-16 mx-auto text-gray-400 mb-4" />
+          <h3 className="text-xl font-semibold text-gray-700 mb-2">Application Services</h3>
+          <p className="text-sm text-gray-500">No Application Services configured. Go to Settings to enable them.</p>
         </div>
       );
     }
+
+    return renderSidebarLayout(sidebarItems, (activeProduct) => {
+      switch (activeProduct) {
+        case 'enterpriseZones':
+          return renderEnterpriseZones();
+        case 'appServices':
+          return renderAppServicesCore();
+        case 'dns':
+          return renderDNS();
+        case 'magicTransit':
+          return renderMagicTransit();
+        case 'botManagement':
+          return renderAddonProduct('botManagement', 'Bot Management', 'Likely Human Requests', 'likelyHuman', 'traffic', '#f59e0b');
+        case 'apiShield':
+          return renderAddonProduct('apiShield', 'API Shield', 'HTTP Requests', 'requests', 'requests', '#8b5cf6');
+        case 'pageShield':
+          return renderAddonProduct('pageShield', 'Page Shield', 'HTTP Requests', 'requests', 'requests', '#ec4899');
+        case 'advancedRateLimiting':
+          return renderAddonProduct('advancedRateLimiting', 'Advanced Rate Limiting', 'HTTP Requests', 'requests', 'requests', '#14b8a6');
+        default:
+          return null;
+      }
+    });
+  }
+
+  function renderEnterpriseZones() {
+    const zonesThreshold = config?.applicationServices?.core?.thresholdZones || config.thresholdZones;
+    const zonesCount = displayZones?.enterprise || 0;
 
     return (
-      <>
-        {/* Zero Trust Seats Section */}
-        <div className="bg-white border border-gray-200 rounded-xl p-6 mb-10">
-          <div className="bg-gradient-to-r from-slate-700 to-slate-600 rounded-lg px-6 py-4 mb-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="text-2xl font-semibold text-white tracking-tight">Zero Trust Seats</h3>
-                <p className="text-slate-200 text-sm mt-1">
-                  Active users consuming Access or Gateway seats
-                </p>
-              </div>
-              
-              {/* View Mode Toggle */}
-              <div className="flex items-center bg-white rounded-lg p-1 shadow-sm">
-                <button
-                  onClick={() => setUsageViewMode('current')}
-                  className={`flex items-center space-x-2 px-4 py-2 rounded-md transition-all font-medium text-sm ${
-                    usageViewMode === 'current'
-                      ? 'bg-blue-600 text-white shadow-sm'
-                      : 'text-gray-600 hover:bg-gray-50'
-                  }`}
-                >
-                  <Calendar className="w-4 h-4" />
-                  <span>Current Month</span>
-                </button>
-                <button
-                  onClick={() => setUsageViewMode('previous')}
-                  className={`flex items-center space-x-2 px-4 py-2 rounded-md transition-all font-medium text-sm ${
-                    usageViewMode === 'previous'
-                      ? 'bg-blue-600 text-white shadow-sm'
-                      : 'text-gray-600 hover:bg-gray-50'
-                  }`}
-                >
-                  <Calendar className="w-4 h-4" />
-                  <span>Last Month</span>
-                </button>
-              </div>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            <MetricCard
-              title="Zero Trust Seats"
-              subtitle="Active Users"
-              value={usageViewMode === 'current' 
-                ? displayMetrics.zeroTrustSeats.current?.seats || 0
-                : displayMetrics.zeroTrustSeats.previous?.seats || 0}
-              formatted={formatNumber(usageViewMode === 'current' 
-                ? displayMetrics.zeroTrustSeats.current?.seats || 0
-                : displayMetrics.zeroTrustSeats.previous?.seats || 0)}
-              threshold={displayMetrics.zeroTrustSeats.threshold}
-              percentage={calculatePercentage(
-                usageViewMode === 'current' 
-                  ? displayMetrics.zeroTrustSeats.current?.seats || 0
-                  : displayMetrics.zeroTrustSeats.previous?.seats || 0,
-                displayMetrics.zeroTrustSeats.threshold
-              )}
-              icon="users"
-              unit=""
-              accentColor="#8b5cf6"
-            />
-          </div>
-        </div>
-
-        {/* Usage Chart */}
-        {displayMetrics.zeroTrustSeats.timeSeries && displayMetrics.zeroTrustSeats.timeSeries.length > 0 && (
-          <div className="bg-white border border-gray-200 rounded-xl p-6 mb-10">
-            <div className="bg-gradient-to-r from-slate-700 to-slate-600 rounded-lg px-6 py-4 mb-6">
-              <h3 className="text-2xl font-semibold text-white tracking-tight">Monthly Usage Trends</h3>
-              <p className="text-slate-200 text-sm mt-1">
-                Historical monthly seat count
-              </p>
-            </div>
-            
-            <div className="grid grid-cols-1 gap-6">
-              <UsageChart
-                data={displayMetrics.zeroTrustSeats.timeSeries}
-                dataKey="seats"
-                title="Zero Trust Seats"
-                color="#8b5cf6"
-                threshold={displayMetrics.zeroTrustSeats.threshold}
-                yAxisLabel="Seats"
-              />
-            </div>
-          </div>
-        )}
-      </>
+      <div className="space-y-6">
+        <ConsolidatedCard
+          title="Enterprise Zones"
+          subtitle="Active enterprise zones across accounts"
+          value={zonesCount}
+          formatted={formatNumber(zonesCount)}
+          threshold={zonesThreshold}
+          percentage={calculatePercentage(zonesCount, zonesThreshold)}
+          icon="zones"
+          unit="zones"
+          color="#3b82f6"
+          timeSeries={displayZones?.zonesTimeSeries}
+          dataKey="zones"
+          chartFormatter={formatNumber}
+          yAxisLabel="Zones"
+          zoneBreakdown={displayMetrics?.previousMonthZoneBreakdown}
+          primaryZones={config?.applicationServices?.core?.primaryZones || config.primaryZones}
+          secondaryZones={config?.applicationServices?.core?.secondaryZones || config.secondaryZones}
+        />
+      </div>
     );
   }
 
-  // Render Network Services Tab Content
-  function renderNetworkServices() {
-    const hasMagicTransit = displayMetrics?.magicTransit && displayMetrics.magicTransit.enabled;
-    const hasMagicWan = displayMetrics?.magicWan && displayMetrics.magicWan.enabled;
-    
-    if (!hasMagicTransit && !hasMagicWan) {
-      return (
-        <div className="text-center py-20">
-          <div className="text-gray-400 mb-4">
-            <AlertCircle className="w-16 h-16 mx-auto" />
-          </div>
-          <h3 className="text-xl font-semibold text-gray-700 mb-2">
-            Network Services
-          </h3>
-          <p className="text-sm text-gray-500 max-w-md mx-auto">
-            Magic Transit and Magic WAN are not configured. Go to Settings → Network Services to enable them and select accounts.
-          </p>
-        </div>
-      );
-    }
+  function renderAppServicesCore() {
+    const reqThreshold = config?.applicationServices?.core?.thresholdRequests || config.thresholdRequests;
+    const bwThreshold = config?.applicationServices?.core?.thresholdBandwidth || config.thresholdBandwidth;
+    const currentRequests = displayMetrics?.current?.requests || 0;
+    const currentBytes = displayMetrics?.current?.bytes || 0;
 
-    // Helper to format Mbps nicely (handles small values)
+    return (
+      <div className="space-y-6">
+        <ConsolidatedCard
+          title="HTTP Requests"
+          subtitle="Billable HTTP requests (excluding blocked)"
+          value={currentRequests}
+          formatted={formatRequests(currentRequests)}
+          threshold={reqThreshold}
+          percentage={calculatePercentage(currentRequests, reqThreshold)}
+          icon="requests"
+          unit="M"
+          color="#3b82f6"
+          timeSeries={displayMetrics?.timeSeries}
+          dataKey="requests"
+          chartFormatter={formatRequests}
+          yAxisLabel="Requests"
+          confidence={displayMetrics?.current?.confidence?.requests}
+          summaryBadge={displayMetrics?.current?.totalRequests != null ? (() => {
+            const http = displayMetrics.current;
+            return (
+              <div className="bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-xs">
+                <div className="flex items-center justify-between space-x-2 mb-1">
+                  <span className="text-gray-600">Total:</span>
+                  <span className="font-semibold text-gray-900">{formatRequests(http.totalRequests)}</span>
+                </div>
+                <div className="flex items-center justify-between space-x-2">
+                  <span className="text-gray-600">Blocked:</span>
+                  <span className="font-semibold text-gray-900">{formatRequests(http.blockedRequests || 0)}</span>
+                </div>
+              </div>
+            );
+          })() : null}
+        />
+        <ConsolidatedCard
+          title="Data Transfer"
+          subtitle="Billable bandwidth served"
+          value={currentBytes}
+          formatted={formatBandwidthTB(currentBytes)}
+          threshold={bwThreshold}
+          percentage={calculatePercentage(currentBytes, bwThreshold)}
+          icon="bandwidth"
+          unit="TB"
+          color="#6366f1"
+          timeSeries={displayMetrics?.timeSeries}
+          dataKey="bytes"
+          chartFormatter={formatBandwidthTB}
+          yAxisLabel="Bandwidth"
+          confidence={displayMetrics?.current?.confidence?.bytes}
+          confidenceMetricType="HTTP Requests (measuring bytes)"
+          summaryBadge={displayMetrics?.current?.totalBytes != null ? (() => {
+            const httpBytes = displayMetrics.current;
+            return (
+              <div className="bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-xs">
+                <div className="flex items-center justify-between space-x-2 mb-1">
+                  <span className="text-gray-600">Total:</span>
+                  <span className="font-semibold text-gray-900">{formatBandwidthTB(httpBytes.totalBytes)}</span>
+                </div>
+                <div className="flex items-center justify-between space-x-2">
+                  <span className="text-gray-600">Blocked:</span>
+                  <span className="font-semibold text-gray-900">{formatBandwidthTB(httpBytes.blockedBytes || 0)}</span>
+                </div>
+              </div>
+            );
+          })() : null}
+        />
+        {renderZoneBreakdown('appServices')}
+      </div>
+    );
+  }
+
+  function renderDNS() {
+    const dnsThreshold = config?.applicationServices?.core?.thresholdDnsQueries || config.thresholdDnsQueries;
+    const currentDns = displayMetrics?.current?.dnsQueries || 0;
+
+    return (
+      <div className="space-y-6">
+        <ConsolidatedCard
+          title="DNS Queries"
+          subtitle="Authoritative DNS query volume"
+          value={currentDns}
+          formatted={formatRequests(currentDns)}
+          threshold={dnsThreshold}
+          percentage={calculatePercentage(currentDns, dnsThreshold)}
+          icon="dns"
+          unit="M"
+          color="#0ea5e9"
+          timeSeries={displayMetrics?.timeSeries}
+          dataKey="dnsQueries"
+          chartFormatter={formatRequests}
+          yAxisLabel="Queries"
+          confidence={displayMetrics?.current?.confidence?.dnsQueries}
+          confidenceMetricType="DNS Queries"
+        />
+      </div>
+    );
+  }
+
+  function renderMagicTransit() {
     const formatBandwidth = (mbps) => {
-      if (mbps >= 1000) {
-        return `${(mbps / 1000).toFixed(2)} Gbps`;
-      }
-      if (mbps >= 1) {
-        return `${mbps.toFixed(2)} Mbps`;
-      }
-      if (mbps >= 0.001) {
-        return `${(mbps * 1000).toFixed(2)} Kbps`;
-      }
-      if (mbps > 0) {
-        return `${(mbps * 1000000).toFixed(2)} bps`;
-      }
+      if (mbps >= 1000) return `${(mbps / 1000).toFixed(2)} Gbps`;
+      if (mbps >= 1) return `${mbps.toFixed(2)} Mbps`;
+      if (mbps >= 0.001) return `${(mbps * 1000).toFixed(2)} Kbps`;
+      if (mbps > 0) return `${(mbps * 1000000).toFixed(2)} bps`;
       return '0 Mbps';
     };
 
+    const mt = displayMetrics?.magicTransit;
+    if (!mt?.enabled) return null;
+
+    const showEgress = mt.egressEnabled;
+
     return (
-      <>
-        {/* Network Services Metrics */}
-        <div className="bg-white border border-gray-200 rounded-xl p-6 mb-10">
-          <div className="bg-gradient-to-r from-slate-700 to-slate-600 rounded-lg px-6 py-4 mb-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="text-2xl font-semibold text-white tracking-tight">P95th Bandwidth</h3>
-                <p className="text-slate-200 text-sm mt-1">
-                  Peak bandwidth usage across Magic Transit and Magic WAN tunnels
-                </p>
-                <p className="text-slate-400 text-xs mt-1">
-                  Note: Accounts with both services will report combined tunnel bandwidth.
-                </p>
-              </div>
-              
-              {/* View Mode Toggle */}
-              <div className="flex items-center bg-white rounded-lg p-1 shadow-sm">
-                <button
-                  onClick={() => setUsageViewMode('current')}
-                  className={`flex items-center space-x-2 px-4 py-2 rounded-md transition-all font-medium text-sm ${
-                    usageViewMode === 'current'
-                      ? 'bg-blue-600 text-white shadow-sm'
-                      : 'text-gray-600 hover:bg-gray-50'
-                  }`}
-                >
-                  <Calendar className="w-4 h-4" />
-                  <span>Current Month</span>
-                </button>
-                <button
-                  onClick={() => setUsageViewMode('previous')}
-                  className={`flex items-center space-x-2 px-4 py-2 rounded-md transition-all font-medium text-sm ${
-                    usageViewMode === 'previous'
-                      ? 'bg-blue-600 text-white shadow-sm'
-                      : 'text-gray-600 hover:bg-gray-50'
-                  }`}
-                >
-                  <Calendar className="w-4 h-4" />
-                  <span>Last Month</span>
-                </button>
-              </div>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {/* Magic Transit */}
-            {hasMagicTransit && (
-              <MetricCard
-                title="Magic Transit"
-                subtitle="P95th Bandwidth"
-                value={usageViewMode === 'current' 
-                  ? displayMetrics.magicTransit.current?.p95Mbps || 0
-                  : displayMetrics.magicTransit.previous?.p95Mbps || 0}
-                formatted={formatBandwidth(usageViewMode === 'current' 
-                  ? displayMetrics.magicTransit.current?.p95Mbps || 0
-                  : displayMetrics.magicTransit.previous?.p95Mbps || 0)}
-                threshold={displayMetrics.magicTransit.threshold}
-                percentage={calculatePercentage(
-                  usageViewMode === 'current' 
-                    ? displayMetrics.magicTransit.current?.p95Mbps || 0
-                    : displayMetrics.magicTransit.previous?.p95Mbps || 0,
-                  displayMetrics.magicTransit.threshold
-                )}
-                icon="bandwidth"
-                unit="Mbps"
-                accentColor="#0ea5e9"
-              />
-            )}
-
-            {/* Magic WAN */}
-            {hasMagicWan && (
-              <MetricCard
-                title="Magic WAN"
-                subtitle="P95th Bandwidth"
-                value={usageViewMode === 'current' 
-                  ? displayMetrics.magicWan.current?.p95Mbps || 0
-                  : displayMetrics.magicWan.previous?.p95Mbps || 0}
-                formatted={formatBandwidth(usageViewMode === 'current' 
-                  ? displayMetrics.magicWan.current?.p95Mbps || 0
-                  : displayMetrics.magicWan.previous?.p95Mbps || 0)}
-                threshold={displayMetrics.magicWan.threshold}
-                percentage={calculatePercentage(
-                  usageViewMode === 'current' 
-                    ? displayMetrics.magicWan.current?.p95Mbps || 0
-                    : displayMetrics.magicWan.previous?.p95Mbps || 0,
-                  displayMetrics.magicWan.threshold
-                )}
-                icon="bandwidth"
-                unit="Mbps"
-                accentColor="#14b8a6"
-              />
-            )}
-          </div>
-        </div>
-
-        {/* Usage Charts */}
-        {((hasMagicTransit && displayMetrics.magicTransit.timeSeries?.length > 0) ||
-          (hasMagicWan && displayMetrics.magicWan.timeSeries?.length > 0)) && (
-          <div className="bg-white border border-gray-200 rounded-xl p-6 mb-10">
-            <div className="bg-gradient-to-r from-slate-700 to-slate-600 rounded-lg px-6 py-4 mb-6">
-              <h3 className="text-2xl font-semibold text-white tracking-tight">Monthly Usage Trends</h3>
-              <p className="text-slate-200 text-sm mt-1">
-                Historical monthly P95th bandwidth
-              </p>
-            </div>
-            
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {hasMagicTransit && displayMetrics.magicTransit.timeSeries?.length > 0 && (
-                <UsageChart
-                  data={displayMetrics.magicTransit.timeSeries}
-                  dataKey="p95Mbps"
-                  title="Magic Transit: P95th Bandwidth"
-                  color="#0ea5e9"
-                  threshold={displayMetrics.magicTransit.threshold}
-                  yAxisLabel="Mbps"
-                />
-              )}
-
-              {hasMagicWan && displayMetrics.magicWan.timeSeries?.length > 0 && (
-                <UsageChart
-                  data={displayMetrics.magicWan.timeSeries}
-                  dataKey="p95Mbps"
-                  title="Magic WAN: P95th Bandwidth"
-                  color="#14b8a6"
-                  threshold={displayMetrics.magicWan.threshold}
-                  yAxisLabel="Mbps"
-                />
-              )}
-            </div>
-          </div>
+      <div className="space-y-6">
+        {showEgress ? (
+          <>
+            <ConsolidatedCard
+              title="Magic Transit (Ingress)"
+              subtitle="P95th Bandwidth"
+              value={mt.current?.ingressP95Mbps || 0}
+              formatted={formatBandwidth(mt.current?.ingressP95Mbps || 0)}
+              threshold={mt.threshold}
+              percentage={calculatePercentage(mt.current?.ingressP95Mbps || 0, mt.threshold)}
+              icon="bandwidth"
+              unit="Mbps"
+              color="#0ea5e9"
+              timeSeries={mt.timeSeries}
+              dataKey="ingressP95Mbps"
+              yAxisLabel="Mbps"
+            />
+            <ConsolidatedCard
+              title="Magic Transit (Egress)"
+              subtitle="P95th Bandwidth"
+              value={mt.current?.egressP95Mbps || 0}
+              formatted={formatBandwidth(mt.current?.egressP95Mbps || 0)}
+              threshold={mt.egressThreshold}
+              percentage={calculatePercentage(mt.current?.egressP95Mbps || 0, mt.egressThreshold)}
+              icon="bandwidth"
+              unit="Mbps"
+              color="#06b6d4"
+              timeSeries={mt.timeSeries}
+              dataKey="egressP95Mbps"
+              yAxisLabel="Mbps"
+            />
+          </>
+        ) : (
+          <ConsolidatedCard
+            title="Magic Transit"
+            subtitle="P95th Bandwidth"
+            value={mt.current?.p95Mbps || 0}
+            formatted={formatBandwidth(mt.current?.p95Mbps || 0)}
+            threshold={mt.threshold}
+            percentage={calculatePercentage(mt.current?.p95Mbps || 0, mt.threshold)}
+            icon="bandwidth"
+            unit="Mbps"
+            color="#0ea5e9"
+            timeSeries={mt.timeSeries}
+            dataKey="p95Mbps"
+            yAxisLabel="Mbps"
+          />
         )}
-      </>
+      </div>
     );
   }
 
-  // Render Placeholder for Future Services
-  function renderPlaceholderService(serviceName) {
+  function renderAddonProduct(productKey, title, subtitle, dataField, iconType, color) {
+    const product = displayMetrics?.[productKey];
+    if (!product?.enabled) return null;
+
+    const currentVal = product.current?.[dataField] || 0;
+
     return (
-      <div className="text-center py-20">
-        <div className="text-gray-400 mb-4">
-          <AlertCircle className="w-16 h-16 mx-auto" />
+      <div className="space-y-6">
+        <ConsolidatedCard
+          title={title}
+          subtitle={subtitle}
+          value={currentVal}
+          formatted={formatRequests(currentVal)}
+          threshold={product.threshold}
+          percentage={calculatePercentage(currentVal, product.threshold)}
+          icon={iconType}
+          unit="M"
+          color={color}
+          timeSeries={product.timeSeries}
+          dataKey={dataField}
+          chartFormatter={formatRequests}
+          yAxisLabel={subtitle}
+          confidence={product.current?.confidence}
+          confidenceMetricType={subtitle}
+          isZoneFiltered={true}
+        />
+        {renderAddonZoneBreakdown(productKey, title, dataField)}
+      </div>
+    );
+  }
+
+  function renderZoneBreakdown(type) {
+    if (!displayZones?.zones || displayZones.zones.length === 0) return null;
+
+    return (
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
+        <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+          <div>
+            <h3 className="text-lg font-semibold text-gray-900">Breakdown by Zone</h3>
+            <p className="text-sm text-gray-500 mt-1">Usage per enterprise zone</p>
+          </div>
+          <div className="flex items-center bg-gray-100 rounded-lg p-1">
+            <button
+              onClick={() => setZonesViewMode('current')}
+              className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                zonesViewMode === 'current'
+                  ? 'bg-blue-600 text-white shadow-sm'
+                  : 'text-gray-600 hover:bg-gray-200'
+              }`}
+            >
+              Current Month
+            </button>
+            <button
+              onClick={() => setZonesViewMode('previous')}
+              className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                zonesViewMode === 'previous'
+                  ? 'bg-blue-600 text-white shadow-sm'
+                  : 'text-gray-600 hover:bg-gray-200'
+              }`}
+            >
+              Previous Month
+            </button>
+          </div>
         </div>
-        <h3 className="text-xl font-semibold text-gray-700 mb-2">
-          {serviceName}
-        </h3>
-        <p className="text-sm text-gray-500 max-w-md mx-auto">
-          SKUs and metrics for {serviceName} will be added here. This section will display usage data once configured.
-        </p>
+        <div className="p-6">
+          {zonesViewMode === 'current' && (
+            <div className="mb-4 flex items-center space-x-1.5 text-xs text-gray-500">
+              <div className="relative group">
+                <Info className="w-4 h-4 text-gray-400 cursor-help" />
+                <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-64 px-3 py-2 bg-gray-900 text-white text-xs rounded-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50 pointer-events-none">
+                  Primary/secondary classifications are based on previous month's usage (zones with ≥50GB are Primary).
+                  <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-gray-900"></div>
+                </div>
+              </div>
+              <span>Classifications based on previous month</span>
+            </div>
+          )}
+          <ZonesList
+            zones={displayZones.zones}
+            zoneMetrics={zonesViewMode === 'current'
+              ? displayMetrics?.zoneBreakdown?.zones
+              : displayMetrics?.previousMonthZoneBreakdown?.zones}
+            usePreviousClassification={zonesViewMode === 'current'}
+            previousMonthMetrics={displayMetrics?.previousMonthZoneBreakdown?.zones}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  function renderAddonZoneBreakdown(productKey, title, dataField) {
+    const product = displayMetrics?.[productKey];
+    const zoneData = zonesViewMode === 'current' ? product?.current?.zones : product?.previous?.zones;
+    if (!zoneData || zoneData.length === 0) return null;
+
+    const uniqueZones = zoneData.reduce((acc, zone) => {
+      const id = zone.zoneId;
+      if (!acc[id]) acc[id] = zone;
+      return acc;
+    }, {});
+    const deduplicatedZones = Object.values(uniqueZones);
+
+    return (
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
+        <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+          <div>
+            <h3 className="text-lg font-semibold text-gray-900">{title} - Breakdown by Zone</h3>
+            <p className="text-sm text-gray-500 mt-1">Usage per zone</p>
+          </div>
+          <div className="flex items-center bg-gray-100 rounded-lg p-1">
+            <button
+              onClick={() => setZonesViewMode('current')}
+              className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                zonesViewMode === 'current'
+                  ? 'bg-blue-600 text-white shadow-sm'
+                  : 'text-gray-600 hover:bg-gray-200'
+              }`}
+            >
+              Current Month
+            </button>
+            <button
+              onClick={() => setZonesViewMode('previous')}
+              className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                zonesViewMode === 'previous'
+                  ? 'bg-blue-600 text-white shadow-sm'
+                  : 'text-gray-600 hover:bg-gray-200'
+              }`}
+            >
+              Previous Month
+            </button>
+          </div>
+        </div>
+        <div className="p-6">
+          <div className="bg-gray-50 border border-gray-200 rounded-lg overflow-hidden">
+            <div className="max-h-96 overflow-y-auto">
+              <table className="min-w-full divide-y divide-gray-200">
+                <thead className="bg-gray-100 sticky top-0 z-10">
+                  <tr>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Zone</th>
+                    <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">{title === 'Bot Management' ? 'Likely Human Requests' : 'Requests'}</th>
+                  </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-200">
+                  {deduplicatedZones.map((zone, index) => (
+                    <tr key={zone.zoneId || index} className="hover:bg-gray-50">
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div className="text-sm font-medium text-gray-900">{zone.zoneName || zone.zoneId || 'Unknown Zone'}</div>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-right">
+                        <span className="text-sm font-semibold text-gray-900">
+                          {formatRequests(zone[dataField] || zone.requests || zone.likelyHuman || 0)}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  function renderCloudflareOne() {
+    const sidebarItems = [];
+
+    if (displayMetrics?.zeroTrustSeats?.enabled) {
+      sidebarItems.push({ id: 'zeroTrustSeats', label: 'Zero Trust Seats' });
+    }
+    if (displayMetrics?.magicWan?.enabled) {
+      sidebarItems.push({ id: 'wan', label: 'WAN' });
+    }
+
+    if (sidebarItems.length === 0) {
+      return (
+        <div className="text-center py-20">
+          <AlertCircle className="w-16 h-16 mx-auto text-gray-400 mb-4" />
+          <h3 className="text-xl font-semibold text-gray-700 mb-2">Cloudflare One</h3>
+          <p className="text-sm text-gray-500">No Cloudflare One services configured. Go to Settings to enable Zero Trust Seats or WAN.</p>
+        </div>
+      );
+    }
+
+    return renderSidebarLayout(sidebarItems, (activeProduct) => {
+      switch (activeProduct) {
+        case 'zeroTrustSeats':
+          return renderZeroTrustSeats();
+        case 'wan':
+          return renderWAN();
+        default:
+          return null;
+      }
+    });
+  }
+
+  function renderZeroTrustSeats() {
+    const zt = displayMetrics?.zeroTrustSeats;
+    if (!zt?.enabled) return null;
+
+    return (
+      <div className="space-y-6">
+        <ConsolidatedCard
+          title="Zero Trust Seats"
+          subtitle="Active users consuming Access or Gateway seats"
+          value={zt.current?.seats || 0}
+          formatted={formatNumber(zt.current?.seats || 0)}
+          threshold={zt.threshold}
+          percentage={calculatePercentage(zt.current?.seats || 0, zt.threshold)}
+          icon="users"
+          unit=""
+          color="#8b5cf6"
+          timeSeries={zt.timeSeries}
+          dataKey="seats"
+          yAxisLabel="Seats"
+        />
+      </div>
+    );
+  }
+
+  function renderWAN() {
+    const formatBandwidth = (mbps) => {
+      if (mbps >= 1000) return `${(mbps / 1000).toFixed(2)} Gbps`;
+      if (mbps >= 1) return `${mbps.toFixed(2)} Mbps`;
+      if (mbps >= 0.001) return `${(mbps * 1000).toFixed(2)} Kbps`;
+      if (mbps > 0) return `${(mbps * 1000000).toFixed(2)} bps`;
+      return '0 Mbps';
+    };
+
+    const wan = displayMetrics?.magicWan;
+    if (!wan?.enabled) return null;
+
+    return (
+      <div className="space-y-6">
+        <ConsolidatedCard
+          title="WAN"
+          subtitle="P95th Bandwidth"
+          value={wan.current?.p95Mbps || 0}
+          formatted={formatBandwidth(wan.current?.p95Mbps || 0)}
+          threshold={wan.threshold}
+          percentage={calculatePercentage(wan.current?.p95Mbps || 0, wan.threshold)}
+          icon="bandwidth"
+          unit="Mbps"
+          color="#14b8a6"
+          timeSeries={wan.timeSeries}
+          dataKey="p95Mbps"
+          yAxisLabel="Mbps"
+        />
+      </div>
+    );
+  }
+
+  function renderDeveloperPlatform() {
+    const sidebarItems = [];
+
+    if (displayMetrics?.workersPages?.enabled) {
+      sidebarItems.push({ id: 'workersPages', label: 'Workers & Pages' });
+    }
+    if (displayMetrics?.r2Storage?.enabled) {
+      sidebarItems.push({ id: 'r2Storage', label: 'R2 Storage' });
+    }
+
+    if (sidebarItems.length === 0) {
+      return (
+        <div className="text-center py-20">
+          <AlertCircle className="w-16 h-16 mx-auto text-gray-400 mb-4" />
+          <h3 className="text-xl font-semibold text-gray-700 mb-2">Developer Platform</h3>
+          <p className="text-sm text-gray-500">No Developer Platform services configured. Go to Settings to enable Workers & Pages or R2 Storage.</p>
+        </div>
+      );
+    }
+
+    return renderSidebarLayout(sidebarItems, (activeProduct) => {
+      switch (activeProduct) {
+        case 'workersPages':
+          return renderWorkersPages();
+        case 'r2Storage':
+          return renderR2Storage();
+        default:
+          return null;
+      }
+    });
+  }
+
+  function renderWorkersPages() {
+    const wp = displayMetrics?.workersPages;
+    if (!wp?.enabled) return null;
+
+    const formatReqs = (val) => {
+      if (val >= 1000000000) return `${(val / 1000000000).toFixed(2)}B`;
+      if (val >= 1000000) return `${(val / 1000000).toFixed(2)}M`;
+      if (val >= 1000) return `${(val / 1000).toFixed(1)}K`;
+      return val.toLocaleString();
+    };
+
+    const formatCpuTime = (ms) => {
+      if (ms >= 1000000000) return `${(ms / 1000000000).toFixed(2)}B ms`;
+      if (ms >= 1000000) return `${(ms / 1000000).toFixed(2)}M ms`;
+      if (ms >= 1000) return `${(ms / 1000).toFixed(1)}K ms`;
+      return `${ms.toLocaleString()} ms`;
+    };
+
+    return (
+      <div className="space-y-6">
+        <ConsolidatedCard
+          title="Workers & Pages Requests"
+          subtitle="Total invocations"
+          value={wp.current?.requests || 0}
+          formatted={formatReqs(wp.current?.requests || 0)}
+          threshold={wp.requestsThreshold ? wp.requestsThreshold * 1000000 : null}
+          percentage={calculatePercentage(wp.current?.requests || 0, wp.requestsThreshold ? wp.requestsThreshold * 1000000 : null)}
+          icon="activity"
+          unit=""
+          color="#3b82f6"
+          timeSeries={wp.timeSeries}
+          dataKey="requests"
+          chartFormatter={formatReqs}
+          yAxisLabel="Requests"
+        />
+        <ConsolidatedCard
+          title="CPU Time"
+          subtitle="Total compute time"
+          value={wp.current?.cpuTimeMs || 0}
+          formatted={formatCpuTime(wp.current?.cpuTimeMs || 0)}
+          threshold={wp.cpuTimeThreshold ? wp.cpuTimeThreshold * 1000000 : null}
+          percentage={calculatePercentage(wp.current?.cpuTimeMs || 0, wp.cpuTimeThreshold ? wp.cpuTimeThreshold * 1000000 : null)}
+          icon="cpu"
+          unit=""
+          color="#6366f1"
+          timeSeries={wp.timeSeries}
+          dataKey="cpuTimeMs"
+          chartFormatter={formatCpuTime}
+          yAxisLabel="CPU Time (ms)"
+        />
+      </div>
+    );
+  }
+
+  function renderR2Storage() {
+    const r2 = displayMetrics?.r2Storage;
+    if (!r2?.enabled) return null;
+
+    const formatReqs = (val) => {
+      if (val >= 1000000000) return `${(val / 1000000000).toFixed(2)}B`;
+      if (val >= 1000000) return `${(val / 1000000).toFixed(2)}M`;
+      if (val >= 1000) return `${(val / 1000).toFixed(1)}K`;
+      return val.toLocaleString();
+    };
+
+    const formatStorage = (gb) => {
+      if (gb >= 1000) return `${(gb / 1000).toFixed(2)} TB`;
+      if (gb >= 1) return `${gb.toFixed(2)} GB`;
+      if (gb >= 0.001) return `${(gb * 1000).toFixed(2)} MB`;
+      return `${(gb * 1000000).toFixed(2)} KB`;
+    };
+
+    return (
+      <div className="space-y-6">
+        <ConsolidatedCard
+          title="Class A Operations"
+          subtitle="Write/List/Delete"
+          value={r2.current?.classAOps || 0}
+          formatted={formatReqs(r2.current?.classAOps || 0)}
+          threshold={r2.classAOpsThreshold ? r2.classAOpsThreshold * 1000000 : null}
+          percentage={calculatePercentage(r2.current?.classAOps || 0, r2.classAOpsThreshold ? r2.classAOpsThreshold * 1000000 : null)}
+          icon="upload"
+          unit=""
+          color="#3b82f6"
+          timeSeries={r2.timeSeries}
+          dataKey="classAOps"
+          chartFormatter={formatReqs}
+          yAxisLabel="Operations"
+        />
+        <ConsolidatedCard
+          title="Class B Operations"
+          subtitle="Read"
+          value={r2.current?.classBOps || 0}
+          formatted={formatReqs(r2.current?.classBOps || 0)}
+          threshold={r2.classBOpsThreshold ? r2.classBOpsThreshold * 1000000 : null}
+          percentage={calculatePercentage(r2.current?.classBOps || 0, r2.classBOpsThreshold ? r2.classBOpsThreshold * 1000000 : null)}
+          icon="download"
+          unit=""
+          color="#6366f1"
+          timeSeries={r2.timeSeries}
+          dataKey="classBOps"
+          chartFormatter={formatReqs}
+          yAxisLabel="Operations"
+        />
+        <ConsolidatedCard
+          title="Total Storage"
+          subtitle="Capacity used"
+          value={r2.current?.storageGB || 0}
+          formatted={formatStorage(r2.current?.storageGB || 0)}
+          threshold={r2.storageThreshold || null}
+          percentage={calculatePercentage(r2.current?.storageGB || 0, r2.storageThreshold || null)}
+          icon="database"
+          unit=""
+          color="#10b981"
+          timeSeries={r2.timeSeries}
+          dataKey="storageGB"
+          chartFormatter={formatStorage}
+          yAxisLabel="Storage (GB)"
+        />
       </div>
     );
   }
 }
 
 export default Dashboard;
+

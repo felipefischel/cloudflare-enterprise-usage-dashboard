@@ -44,3 +44,7 @@ build/
 .cache/
 .temp/
 SKU_IMPLEMENTATION_GUIDE.md
+
+# AI assistant files
+.windsurfrules
+CLAUDE.md

@@ -14,21 +14,18 @@ This is NOT an official Cloudflare tool. Official billing data from Cloudflare m
 ## Features
 
 - 📊 **Real-time Usage Monitoring**: Track your contracted services:
-  - Enterprise Zones
-  - HTTP Requests (billable traffic only)
-  - Data Transfer (bilable traffic only)
-  - DNS Queries
-  - Application Security products (Bot Management, API Shield, Page Shield, etc.)
-  - Other add-on products
+  - **Application Services**: Enterprise Zones, HTTP Requests, Data Transfer, DNS, Magic Transit
+  - **Security Add-ons**: Bot Management, API Shield, Page Shield, Advanced Rate Limiting
+  - **Cloudflare One**: Zero Trust Seats, Magic WAN
+  - **Developer Platform**: Workers & Pages, R2 Storage
 
 - 🛡️ **Blocked Traffic Excluded**:
 Cloudflare does not charge for traffic blocked by security features (DDoS, WAF, etc.). The HTTP Requests and Data Transfer metrics shown in this dashboard automatically exclude blocked traffic and reflect only billable/clean traffic that reached your origin or was served from cache.
 
 - 📈 **Usage Analytics**:
-  - Current month vs. previous month comparison
-  - Historical trends with monthly charts
-  - Visual progress bars showing consumption against thresholds
-  - Per-zone breakdowns for detailed analysis
+  - Monthly charts with historical trends (data builds over time)
+  - Visual utilization bars showing consumption against thresholds
+  - Per-zone breakdowns for applicable products
 
 - 🔔 **Threshold Alerts**:
   - Slack notifications when usage reaches 90% of thresholds
@@ -173,11 +170,12 @@ Enter your Cloudflare Account ID(s):
 
 Set your contracted limits for **aggregated usage** across all accounts:
 
-- **Enterprise Zones**: Total number of enterprise zones
-- **HTTP Requests**: Total clean HTTP requests per month
-- **Data Transfer**: Total clean data transfer per month
-- **DNS Queries**: Total DNS queries per month
-- **Application Security Products**: Configure thresholds for Bot Management, API Shield, Page Shield, and Advanced Rate Limiting
+- **Application Services**: Enterprise Zones, HTTP Requests, Data Transfer, DNS Queries, Magic Transit (P95 bandwidth)
+- **Security Add-ons**: Bot Management, API Shield, Page Shield, Advanced Rate Limiting
+- **Cloudflare One**: Zero Trust Seats, Magic WAN (P95 bandwidth)
+- **Developer Platform**: Workers & Pages (requests, CPU time), R2 Storage (operations, storage)
+
+Account-level products (Magic Transit, Magic WAN, Zero Trust, Workers & Pages, R2) support per-account configuration.
 
 ### Slack Notifications (Optional)
 

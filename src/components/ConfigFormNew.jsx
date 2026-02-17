@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Save, X, TrendingUp, Key, AlertTriangle, Plus, Trash2, RefreshCw, CheckCircle } from 'lucide-react';
+import { Save, X, TrendingUp, Key, AlertTriangle, Plus, Trash2, RefreshCw, CheckCircle, ChevronRight } from 'lucide-react';
 import { MessageSquare } from 'lucide-react';
 import { SERVICE_CATEGORIES, SERVICE_METADATA, APPLICATION_SERVICES_SKUS } from '../constants/services';
 
@@ -9,6 +9,7 @@ function ConfigFormNew({ onSave, initialConfig, onCancel, cachedZones }) {
   
   // Active service tab
   const [activeServiceTab, setActiveServiceTab] = useState(SERVICE_CATEGORIES.APPLICATION_SERVICES);
+  const [selectedConfigProduct, setSelectedConfigProduct] = useState(null);
   
   // Loaded zones from accounts (use cached zones if available)
   const [availableZones, setAvailableZones] = useState(cachedZones?.zones || []);
@@ -114,7 +115,9 @@ function ConfigFormNew({ onSave, initialConfig, onCancel, cachedZones }) {
     networkServices: {
       magicTransit: {
         enabled: initialConfig?.networkServices?.magicTransit?.enabled || false,
+        egressEnabled: initialConfig?.networkServices?.magicTransit?.egressEnabled || false,
         threshold: initialConfig?.networkServices?.magicTransit?.threshold || '',
+        egressThreshold: initialConfig?.networkServices?.magicTransit?.egressThreshold || '',
         accountIds: initialConfig?.networkServices?.magicTransit?.accountIds || [],
       },
       magicWan: {
@@ -124,8 +127,22 @@ function ConfigFormNew({ onSave, initialConfig, onCancel, cachedZones }) {
       },
     },
     
-    // Developer Services thresholds (placeholder for future)
-    developerServices: {},
+    // Developer Services thresholds
+    developerServices: {
+      workersPages: {
+        enabled: initialConfig?.developerServices?.workersPages?.enabled || false,
+        requestsThreshold: initialConfig?.developerServices?.workersPages?.requestsThreshold || '',
+        cpuTimeThreshold: initialConfig?.developerServices?.workersPages?.cpuTimeThreshold || '',
+        accountIds: initialConfig?.developerServices?.workersPages?.accountIds || [],
+      },
+      r2Storage: {
+        enabled: initialConfig?.developerServices?.r2Storage?.enabled || false,
+        classAOpsThreshold: initialConfig?.developerServices?.r2Storage?.classAOpsThreshold || '',
+        classBOpsThreshold: initialConfig?.developerServices?.r2Storage?.classBOpsThreshold || '',
+        storageThreshold: initialConfig?.developerServices?.r2Storage?.storageThreshold || '',
+        accountIds: initialConfig?.developerServices?.r2Storage?.accountIds || [],
+      },
+    },
     
     slackWebhook: initialConfig?.slackWebhook || '',
   });
@@ -460,7 +477,9 @@ function ConfigFormNew({ onSave, initialConfig, onCancel, cachedZones }) {
         networkServices: {
           magicTransit: {
             enabled: formData.networkServices.magicTransit.enabled,
+            egressEnabled: formData.networkServices.magicTransit.egressEnabled || false,
             threshold: formData.networkServices.magicTransit.threshold ? parseInt(formData.networkServices.magicTransit.threshold, 10) : null,
+            egressThreshold: formData.networkServices.magicTransit.egressThreshold ? parseInt(formData.networkServices.magicTransit.egressThreshold, 10) : null,
             accountIds: formData.networkServices.magicTransit.accountIds || [],
           },
           magicWan: {
@@ -469,7 +488,21 @@ function ConfigFormNew({ onSave, initialConfig, onCancel, cachedZones }) {
             accountIds: formData.networkServices.magicWan.accountIds || [],
           },
         },
-        developerServices: {},
+        developerServices: {
+          workersPages: {
+            enabled: formData.developerServices.workersPages.enabled,
+            requestsThreshold: formData.developerServices.workersPages.requestsThreshold ? Number(formData.developerServices.workersPages.requestsThreshold) : null,
+            cpuTimeThreshold: formData.developerServices.workersPages.cpuTimeThreshold ? Number(formData.developerServices.workersPages.cpuTimeThreshold) : null,
+            accountIds: formData.developerServices.workersPages.accountIds || [],
+          },
+          r2Storage: {
+            enabled: formData.developerServices.r2Storage.enabled,
+            classAOpsThreshold: formData.developerServices.r2Storage.classAOpsThreshold ? Number(formData.developerServices.r2Storage.classAOpsThreshold) : null,
+            classBOpsThreshold: formData.developerServices.r2Storage.classBOpsThreshold ? Number(formData.developerServices.r2Storage.classBOpsThreshold) : null,
+            storageThreshold: formData.developerServices.r2Storage.storageThreshold ? Number(formData.developerServices.r2Storage.storageThreshold) : null,
+            accountIds: formData.developerServices.r2Storage.accountIds || [],
+          },
+        },
         
         slackWebhook: formData.slackWebhook || '',
         alertsEnabled: initialConfig?.alertsEnabled !== undefined ? initialConfig.alertsEnabled : false,
@@ -658,7 +691,7 @@ function ConfigFormNew({ onSave, initialConfig, onCancel, cachedZones }) {
                 <button
                   key={service.id}
                   type="button"
-                  onClick={() => setActiveServiceTab(service.id)}
+                  onClick={() => { setActiveServiceTab(service.id); setSelectedConfigProduct(null); }}
                   className={`
                     py-4 px-1 border-b-2 font-medium text-sm transition-colors
                     ${isActive 
@@ -675,12 +708,11 @@ function ConfigFormNew({ onSave, initialConfig, onCancel, cachedZones }) {
           </nav>
         </div>
 
-        {/* Service Content */}
-        <div className="px-6 pb-6">
-          {activeServiceTab === SERVICE_CATEGORIES.APPLICATION_SERVICES && renderApplicationServicesConfig()}
-          {activeServiceTab === SERVICE_CATEGORIES.ZERO_TRUST && renderZeroTrustConfig()}
-          {activeServiceTab === SERVICE_CATEGORIES.NETWORK_SERVICES && renderNetworkServicesConfig()}
-          {activeServiceTab === SERVICE_CATEGORIES.DEVELOPER_SERVICES && renderPlaceholderConfig('Developer Services')}
+        {/* Service Content with Sidebar */}
+        <div className="pb-6">
+          {activeServiceTab === SERVICE_CATEGORIES.APPLICATION_SERVICES && renderAppServicesWithSidebar()}
+          {activeServiceTab === SERVICE_CATEGORIES.CLOUDFLARE_ONE && renderCloudflareOneWithSidebar()}
+          {activeServiceTab === SERVICE_CATEGORIES.DEVELOPER_PLATFORM && renderDevPlatformWithSidebar()}
         </div>
 
         {/* Action Buttons */}
@@ -716,6 +748,563 @@ function ConfigFormNew({ onSave, initialConfig, onCancel, cachedZones }) {
     );
   };
 
+  const renderConfigSidebar = (sidebarItems, renderContent) => {
+    const activeProduct = selectedConfigProduct || (sidebarItems.length > 0 ? sidebarItems[0].id : null);
+
+    return (
+      <div className="flex min-h-[400px]">
+        <div className="w-56 border-r border-gray-200 bg-white flex-shrink-0">
+          <nav className="py-2">
+            {sidebarItems.map((item) => {
+              const isActive = activeProduct === item.id;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => setSelectedConfigProduct(item.id)}
+                  className={`w-full flex items-center justify-between px-4 py-3 text-sm transition-colors ${
+                    isActive
+                      ? 'bg-blue-50 text-blue-700 border-r-2 border-blue-600 font-medium'
+                      : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+                  }`}
+                >
+                  <span>{item.label}</span>
+                  <ChevronRight className={`w-4 h-4 ${isActive ? 'text-blue-600' : 'text-gray-400'}`} />
+                </button>
+              );
+            })}
+          </nav>
+        </div>
+        <div className="flex-1 p-6 overflow-auto">
+          {renderContent(activeProduct)}
+        </div>
+      </div>
+    );
+  };
+
+  const renderAppServicesWithSidebar = () => {
+    const items = [
+      { id: 'enterpriseZones', label: 'Enterprise Zones' },
+      { id: 'core', label: 'Enterprise Core' },
+      { id: 'botManagement', label: 'Bot Management' },
+      { id: 'apiShield', label: 'API Shield' },
+      { id: 'pageShield', label: 'Page Shield' },
+      { id: 'advancedRateLimiting', label: 'Adv. Rate Limiting' },
+      { id: 'magicTransit', label: 'Magic Transit' },
+    ];
+    return renderConfigSidebar(items, (active) => {
+      switch (active) {
+        case 'enterpriseZones': return renderEnterpriseZonesConfig();
+        case 'core': return renderCoreConfig();
+        case 'botManagement': return renderBotManagementConfig();
+        case 'apiShield': return renderApiShieldConfig();
+        case 'pageShield': return renderPageShieldConfig();
+        case 'advancedRateLimiting': return renderAdvancedRateLimitingConfig();
+        case 'magicTransit': return renderMagicTransitConfig();
+        default: return null;
+      }
+    });
+  };
+
+  const renderCloudflareOneWithSidebar = () => {
+    const items = [
+      { id: 'zeroTrustSeats', label: 'Zero Trust Seats' },
+      { id: 'wan', label: 'WAN' },
+    ];
+    return renderConfigSidebar(items, (active) => {
+      switch (active) {
+        case 'zeroTrustSeats': return renderZeroTrustSeatsConfig();
+        case 'wan': return renderWanConfig();
+        default: return null;
+      }
+    });
+  };
+
+  const renderDevPlatformWithSidebar = () => {
+    const items = [
+      { id: 'workersPages', label: 'Workers & Pages' },
+      { id: 'r2Storage', label: 'R2 Storage' },
+    ];
+    return renderConfigSidebar(items, (active) => {
+      switch (active) {
+        case 'workersPages': return renderWorkersPagesConfig();
+        case 'r2Storage': return renderR2StorageConfig();
+        default: return null;
+      }
+    });
+  };
+
+  const renderEnterpriseZonesConfig = () => {
+    const appServices = formData.applicationServices;
+    return (
+      <div className="bg-gray-50 border border-gray-200 rounded-lg p-5">
+        <div className="flex items-start justify-between mb-4">
+          <div>
+            <h4 className="text-lg font-semibold text-gray-900">Enterprise Zones</h4>
+            <p className="text-sm text-gray-600 mt-1">Contracted zone counts and classification</p>
+          </div>
+          <label className="flex items-center space-x-2 cursor-pointer">
+            <input type="checkbox" checked={appServices.core.enabled}
+              onChange={(e) => setFormData(prev => ({ ...prev, applicationServices: { ...prev.applicationServices, core: { ...prev.applicationServices.core, enabled: e.target.checked } } }))}
+              className="w-5 h-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500" />
+            <span className="text-sm font-medium text-gray-700">Enable</span>
+          </label>
+        </div>
+        {appServices.core.enabled && (
+          <div className="space-y-6 mt-4 pt-4 border-t border-gray-300">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Enterprise Zones (Total)</label>
+                <input type="number" value={appServices.core.thresholdZones}
+                  onChange={(e) => setFormData(prev => ({ ...prev, applicationServices: { ...prev.applicationServices, core: { ...prev.applicationServices.core, thresholdZones: e.target.value } } }))}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent" placeholder="e.g., 100" min="0" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Primary Zones</label>
+                <input type="number" value={appServices.core.primaryZones}
+                  onChange={(e) => setFormData(prev => ({ ...prev, applicationServices: { ...prev.applicationServices, core: { ...prev.applicationServices.core, primaryZones: e.target.value } } }))}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent" placeholder="e.g., 80" min="0" />
+                <p className="text-xs text-gray-500 mt-1">Zones with ≥50GB bandwidth/month</p>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Secondary Zones</label>
+                <input type="number" value={appServices.core.secondaryZones}
+                  onChange={(e) => setFormData(prev => ({ ...prev, applicationServices: { ...prev.applicationServices, core: { ...prev.applicationServices.core, secondaryZones: e.target.value } } }))}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent" placeholder="e.g., 20" min="0" />
+                <p className="text-xs text-gray-500 mt-1">Zones with &lt;50GB bandwidth/month</p>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const renderCoreConfig = () => {
+    const appServices = formData.applicationServices;
+    return (
+      <div className="bg-gray-50 border border-gray-200 rounded-lg p-5">
+        <div className="flex items-start justify-between mb-4">
+          <div>
+            <h4 className="text-lg font-semibold text-gray-900">Enterprise Core</h4>
+            <p className="text-sm text-gray-600 mt-1">HTTP Requests, Data Transfer, DNS Queries</p>
+          </div>
+        </div>
+        {appServices.core.enabled ? (
+          <div className="space-y-6 mt-4 pt-4 border-t border-gray-300">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">HTTP Requests (Millions)</label>
+                <input type="number" value={appServices.core.thresholdRequests}
+                  onChange={(e) => setFormData(prev => ({ ...prev, applicationServices: { ...prev.applicationServices, core: { ...prev.applicationServices.core, thresholdRequests: e.target.value } } }))}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent" placeholder="e.g., 1000" min="0" step="0.01" />
+                <p className="text-xs text-gray-500 mt-1">In millions (M)</p>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Data Transfer (TB)</label>
+                <input type="number" value={appServices.core.thresholdBandwidth}
+                  onChange={(e) => setFormData(prev => ({ ...prev, applicationServices: { ...prev.applicationServices, core: { ...prev.applicationServices.core, thresholdBandwidth: e.target.value } } }))}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent" placeholder="e.g., 1.0" min="0" step="0.01" />
+                <p className="text-xs text-gray-500 mt-1">In terabytes (TB)</p>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">DNS Queries (Millions)</label>
+                <input type="number" value={appServices.core.thresholdDnsQueries}
+                  onChange={(e) => setFormData(prev => ({ ...prev, applicationServices: { ...prev.applicationServices, core: { ...prev.applicationServices.core, thresholdDnsQueries: e.target.value } } }))}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent" placeholder="e.g., 500" min="0" step="0.01" />
+                <p className="text-xs text-gray-500 mt-1">In millions (M)</p>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="mt-4 pt-4 border-t border-gray-300">
+            <p className="text-sm text-gray-500">Enable Application Services in Enterprise Zones first.</p>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const renderAddonZoneConfig = (addonKey, title, thresholdLabel, toggleZoneFn, toggleAllFn) => {
+    const appServices = formData.applicationServices;
+    const addon = appServices[addonKey];
+    return (
+      <div className="bg-gray-50 border border-gray-200 rounded-lg p-5">
+        <div className="flex items-start justify-between mb-4">
+          <div><h4 className="text-lg font-semibold text-gray-900">{title}</h4></div>
+          <label className="flex items-center space-x-2 cursor-pointer">
+            <input type="checkbox" checked={addon.enabled}
+              onChange={(e) => handleChange('applicationServices', addonKey, { ...addon, enabled: e.target.checked })}
+              className="w-5 h-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500" />
+            <span className="text-sm font-medium text-gray-700">Enable</span>
+          </label>
+        </div>
+        {addon.enabled && (
+          <div className="space-y-4 mt-4 pt-4 border-t border-gray-300">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">{thresholdLabel}</label>
+              <input type="number" value={addon.threshold}
+                onChange={(e) => handleChange('applicationServices', addonKey, { ...addon, threshold: e.target.value })}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                placeholder="e.g., 1000" min="0" step="0.01" />
+              <p className="text-xs text-gray-500 mt-1">Total contracted across all selected zones</p>
+            </div>
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <label className="block text-sm font-medium text-gray-700">Select Zones with {title}</label>
+                {availableZones.length > 0 && (
+                  <button type="button" onClick={toggleAllFn} className="text-sm text-blue-600 hover:text-blue-700 font-medium">
+                    {addon.zones.length === availableZones.length ? 'Deselect All' : 'Select All'}
+                  </button>
+                )}
+              </div>
+              {loadingZones ? (
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 text-center">
+                  <RefreshCw className="w-5 h-5 text-blue-600 animate-spin mx-auto mb-2" />
+                  <p className="text-sm text-blue-800">Loading zones...</p>
+                </div>
+              ) : availableZones.length === 0 ? (
+                <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 text-center">
+                  <p className="text-sm text-yellow-800">Please save and load zones in Step 1 first.</p>
+                </div>
+              ) : (
+                <div className="bg-white border border-gray-300 rounded-lg max-h-36 overflow-y-auto">
+                  {availableZones.map((zone) => (
+                    <label key={zone.id} className="flex items-center space-x-3 px-4 py-3 hover:bg-gray-50 cursor-pointer border-b border-gray-200 last:border-b-0">
+                      <input type="checkbox" checked={addon.zones.includes(zone.id)} onChange={() => toggleZoneFn(zone.id)}
+                        className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500" />
+                      <span className="text-sm text-gray-900 font-medium">{zone.name}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+              <p className="text-xs text-gray-500 mt-2">{addon.zones.length} zone{addon.zones.length !== 1 ? 's' : ''} selected</p>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const renderBotManagementConfig = () => renderAddonZoneConfig('botManagement', 'Bot Management', 'Contracted Likely Human Requests (Millions)', toggleBotManagementZone, toggleAllBotManagementZones);
+  const renderApiShieldConfig = () => renderAddonZoneConfig('apiShield', 'API Shield', 'Contracted HTTP Requests (Millions)', toggleApiShieldZone, toggleAllApiShieldZones);
+  const renderPageShieldConfig = () => renderAddonZoneConfig('pageShield', 'Page Shield', 'Contracted HTTP Requests (Millions)', togglePageShieldZone, toggleAllPageShieldZones);
+  const renderAdvancedRateLimitingConfig = () => renderAddonZoneConfig('advancedRateLimiting', 'Advanced Rate Limiting', 'Contracted HTTP Requests (Millions)', toggleAdvancedRateLimitingZone, toggleAllAdvancedRateLimitingZones);
+
+  const renderMagicTransitConfig = () => {
+    const mt = formData.networkServices.magicTransit;
+    return (
+      <div className="bg-gray-50 border border-gray-200 rounded-lg p-5">
+        <div className="flex items-start justify-between mb-4">
+          <div>
+            <h4 className="text-lg font-semibold text-gray-900">Magic Transit</h4>
+            <p className="text-sm text-gray-600 mt-1">P95th bandwidth for Magic Transit tunnels</p>
+          </div>
+          <label className="flex items-center space-x-2 cursor-pointer">
+            <input type="checkbox" checked={mt.enabled}
+              onChange={(e) => setFormData(prev => ({ ...prev, networkServices: { ...prev.networkServices, magicTransit: { ...prev.networkServices.magicTransit, enabled: e.target.checked } } }))}
+              className="w-5 h-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500" />
+            <span className="text-sm font-medium text-gray-700">Enable</span>
+          </label>
+        </div>
+        {mt.enabled && (
+          <div className="space-y-4 mt-4 pt-4 border-t border-gray-300">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Select Accounts with Magic Transit</label>
+              <p className="text-xs text-gray-500 mb-3">Choose which accounts have Magic Transit contracted</p>
+              {formData.accountIds.filter(id => id.trim()).length === 0 ? (
+                <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+                  <p className="text-sm text-yellow-800">No accounts configured. Please add account IDs first.</p>
+                </div>
+              ) : (
+                <div className="space-y-2 bg-gray-50 rounded-lg p-4 max-h-48 overflow-y-auto">
+                  {formData.accountIds.filter(id => id.trim()).map((accountId) => (
+                    <label key={accountId} className="flex items-center space-x-3 p-2 hover:bg-gray-100 rounded cursor-pointer">
+                      <input type="checkbox" checked={mt.accountIds.includes(accountId)}
+                        onChange={(e) => {
+                          const newIds = e.target.checked ? [...mt.accountIds, accountId] : mt.accountIds.filter(id => id !== accountId);
+                          setFormData(prev => ({ ...prev, networkServices: { ...prev.networkServices, magicTransit: { ...prev.networkServices.magicTransit, accountIds: newIds } } }));
+                        }}
+                        className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500" />
+                      <span className="text-sm text-gray-700">{getAccountName(accountId)}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="max-w-md">
+              <label className="block text-sm font-medium text-gray-700 mb-2">Contracted Bandwidth (Mbps)</label>
+              <input type="number" value={mt.threshold}
+                onChange={(e) => setFormData(prev => ({ ...prev, networkServices: { ...prev.networkServices, magicTransit: { ...prev.networkServices.magicTransit, threshold: e.target.value } } }))}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent" placeholder="e.g., 1000" min="0" />
+              <p className="text-xs text-gray-500 mt-1">P95th ingress bandwidth threshold in Mbps</p>
+            </div>
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+              <label className="flex items-center space-x-3 cursor-pointer">
+                <input type="checkbox" checked={mt.egressEnabled || false}
+                  onChange={(e) => setFormData(prev => ({ ...prev, networkServices: { ...prev.networkServices, magicTransit: { ...prev.networkServices.magicTransit, egressEnabled: e.target.checked } } }))}
+                  className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500" />
+                <div>
+                  <span className="text-sm font-medium text-gray-900">Egress Enabled</span>
+                  <p className="text-xs text-gray-600 mt-0.5">Check if your contract includes egress bandwidth billing</p>
+                </div>
+              </label>
+              {mt.egressEnabled && (
+                <div className="mt-4 pt-4 border-t border-blue-200">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Egress Contracted Bandwidth (Mbps)</label>
+                  <input type="number" value={mt.egressThreshold || ''}
+                    onChange={(e) => setFormData(prev => ({ ...prev, networkServices: { ...prev.networkServices, magicTransit: { ...prev.networkServices.magicTransit, egressThreshold: e.target.value } } }))}
+                    className="w-full max-w-md px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent" placeholder="e.g., 500" min="0" />
+                  <p className="text-xs text-gray-500 mt-1">P95th egress bandwidth threshold in Mbps</p>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const renderZeroTrustSeatsConfig = () => {
+    const zt = formData.zeroTrust.seats;
+    return (
+      <div className="bg-gray-50 border border-gray-200 rounded-lg p-5">
+        <div className="flex items-start justify-between mb-4">
+          <div>
+            <h4 className="text-lg font-semibold text-gray-900">Zero Trust Seats</h4>
+            <p className="text-sm text-gray-600 mt-1">Active users consuming Access or Gateway seats</p>
+          </div>
+          <label className="flex items-center space-x-2 cursor-pointer">
+            <input type="checkbox" checked={zt.enabled}
+              onChange={(e) => setFormData(prev => ({ ...prev, zeroTrust: { ...prev.zeroTrust, seats: { ...prev.zeroTrust.seats, enabled: e.target.checked } } }))}
+              className="w-5 h-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500" />
+            <span className="text-sm font-medium text-gray-700">Enable</span>
+          </label>
+        </div>
+        {zt.enabled && (
+          <div className="space-y-4 mt-4 pt-4 border-t border-gray-300">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Select Accounts with Zero Trust Seats</label>
+              <p className="text-xs text-gray-500 mb-3">Choose which accounts have Enterprise Zero Trust seats contracted</p>
+              {formData.accountIds.filter(id => id.trim()).length === 0 ? (
+                <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+                  <p className="text-sm text-yellow-800">No accounts configured. Please add account IDs first.</p>
+                </div>
+              ) : (
+                <div className="space-y-2 bg-gray-50 rounded-lg p-4 max-h-48 overflow-y-auto">
+                  {formData.accountIds.filter(id => id.trim()).map((accountId) => (
+                    <label key={accountId} className="flex items-center space-x-3 p-2 hover:bg-gray-100 rounded cursor-pointer">
+                      <input type="checkbox" checked={zt.accountIds.includes(accountId)}
+                        onChange={(e) => {
+                          const newIds = e.target.checked ? [...zt.accountIds, accountId] : zt.accountIds.filter(id => id !== accountId);
+                          setFormData(prev => ({ ...prev, zeroTrust: { ...prev.zeroTrust, seats: { ...prev.zeroTrust.seats, accountIds: newIds } } }));
+                        }}
+                        className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500" />
+                      <span className="text-sm text-gray-700">{getAccountName(accountId)}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="max-w-md">
+              <label className="block text-sm font-medium text-gray-700 mb-2">Contracted Seats</label>
+              <input type="number" value={zt.threshold}
+                onChange={(e) => setFormData(prev => ({ ...prev, zeroTrust: { ...prev.zeroTrust, seats: { ...prev.zeroTrust.seats, threshold: e.target.value } } }))}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent" placeholder="e.g., 100" min="0" />
+              <p className="text-xs text-gray-500 mt-1">Total contracted seats across selected accounts</p>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const renderWanConfig = () => {
+    const wan = formData.networkServices.magicWan;
+    return (
+      <div className="bg-gray-50 border border-gray-200 rounded-lg p-5">
+        <div className="flex items-start justify-between mb-4">
+          <div>
+            <h4 className="text-lg font-semibold text-gray-900">WAN</h4>
+            <p className="text-sm text-gray-600 mt-1">P95th bandwidth for WAN tunnels</p>
+          </div>
+          <label className="flex items-center space-x-2 cursor-pointer">
+            <input type="checkbox" checked={wan.enabled}
+              onChange={(e) => setFormData(prev => ({ ...prev, networkServices: { ...prev.networkServices, magicWan: { ...prev.networkServices.magicWan, enabled: e.target.checked } } }))}
+              className="w-5 h-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500" />
+            <span className="text-sm font-medium text-gray-700">Enable</span>
+          </label>
+        </div>
+        {wan.enabled && (
+          <div className="space-y-4 mt-4 pt-4 border-t border-gray-300">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Select Accounts with WAN</label>
+              <p className="text-xs text-gray-500 mb-3">Choose which accounts have WAN contracted</p>
+              {formData.accountIds.filter(id => id.trim()).length === 0 ? (
+                <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+                  <p className="text-sm text-yellow-800">No accounts configured. Please add account IDs first.</p>
+                </div>
+              ) : (
+                <div className="space-y-2 bg-gray-50 rounded-lg p-4 max-h-48 overflow-y-auto">
+                  {formData.accountIds.filter(id => id.trim()).map((accountId) => (
+                    <label key={accountId} className="flex items-center space-x-3 p-2 hover:bg-gray-100 rounded cursor-pointer">
+                      <input type="checkbox" checked={wan.accountIds.includes(accountId)}
+                        onChange={(e) => {
+                          const newIds = e.target.checked ? [...wan.accountIds, accountId] : wan.accountIds.filter(id => id !== accountId);
+                          setFormData(prev => ({ ...prev, networkServices: { ...prev.networkServices, magicWan: { ...prev.networkServices.magicWan, accountIds: newIds } } }));
+                        }}
+                        className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500" />
+                      <span className="text-sm text-gray-700">{getAccountName(accountId)}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="max-w-md">
+              <label className="block text-sm font-medium text-gray-700 mb-2">Contracted Bandwidth (Mbps)</label>
+              <input type="number" value={wan.threshold}
+                onChange={(e) => setFormData(prev => ({ ...prev, networkServices: { ...prev.networkServices, magicWan: { ...prev.networkServices.magicWan, threshold: e.target.value } } }))}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent" placeholder="e.g., 1000" min="0" />
+              <p className="text-xs text-gray-500 mt-1">P95th bandwidth threshold in Mbps</p>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const renderWorkersPagesConfig = () => {
+    const wp = formData.developerServices.workersPages;
+    return (
+      <div className="bg-gray-50 border border-gray-200 rounded-lg p-5">
+        <div className="flex items-start justify-between mb-4">
+          <div>
+            <h4 className="text-lg font-semibold text-gray-900">Workers & Pages</h4>
+            <p className="text-sm text-gray-600 mt-1">Serverless compute requests and CPU time</p>
+          </div>
+          <label className="flex items-center space-x-2 cursor-pointer">
+            <input type="checkbox" checked={wp.enabled}
+              onChange={(e) => setFormData(prev => ({ ...prev, developerServices: { ...prev.developerServices, workersPages: { ...prev.developerServices.workersPages, enabled: e.target.checked } } }))}
+              className="w-5 h-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500" />
+            <span className="text-sm font-medium text-gray-700">Enable</span>
+          </label>
+        </div>
+        {wp.enabled && (
+          <div className="space-y-4 mt-4 pt-4 border-t border-gray-300">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Select Accounts with Workers & Pages</label>
+              <p className="text-xs text-gray-500 mb-3">Choose which accounts have Workers & Pages usage to track</p>
+              {formData.accountIds.filter(id => id.trim()).length === 0 ? (
+                <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+                  <p className="text-sm text-yellow-800">No accounts configured. Please add account IDs first.</p>
+                </div>
+              ) : (
+                <div className="space-y-2 bg-gray-50 rounded-lg p-4 max-h-48 overflow-y-auto">
+                  {formData.accountIds.filter(id => id.trim()).map((accountId) => (
+                    <label key={accountId} className="flex items-center space-x-3 p-2 hover:bg-gray-100 rounded cursor-pointer">
+                      <input type="checkbox" checked={wp.accountIds.includes(accountId)}
+                        onChange={(e) => {
+                          const newIds = e.target.checked ? [...wp.accountIds, accountId] : wp.accountIds.filter(id => id !== accountId);
+                          setFormData(prev => ({ ...prev, developerServices: { ...prev.developerServices, workersPages: { ...prev.developerServices.workersPages, accountIds: newIds } } }));
+                        }}
+                        className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500" />
+                      <span className="text-sm text-gray-700">{getAccountName(accountId)}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="max-w-md">
+              <label className="block text-sm font-medium text-gray-700 mb-2">Contracted Requests (millions)</label>
+              <input type="number" value={wp.requestsThreshold}
+                onChange={(e) => setFormData(prev => ({ ...prev, developerServices: { ...prev.developerServices, workersPages: { ...prev.developerServices.workersPages, requestsThreshold: e.target.value } } }))}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent" placeholder="e.g., 50" min="0" />
+              <p className="text-xs text-gray-500 mt-1">Monthly request threshold in millions</p>
+            </div>
+            <div className="max-w-md">
+              <label className="block text-sm font-medium text-gray-700 mb-2">Contracted CPU Time (million ms)</label>
+              <input type="number" value={wp.cpuTimeThreshold}
+                onChange={(e) => setFormData(prev => ({ ...prev, developerServices: { ...prev.developerServices, workersPages: { ...prev.developerServices.workersPages, cpuTimeThreshold: e.target.value } } }))}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent" placeholder="e.g., 100" min="0" />
+              <p className="text-xs text-gray-500 mt-1">Monthly CPU time threshold in million milliseconds</p>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const renderR2StorageConfig = () => {
+    const r2 = formData.developerServices.r2Storage;
+    return (
+      <div className="bg-gray-50 border border-gray-200 rounded-lg p-5">
+        <div className="flex items-start justify-between mb-4">
+          <div>
+            <h4 className="text-lg font-semibold text-gray-900">R2 Storage</h4>
+            <p className="text-sm text-gray-600 mt-1">Object storage operations and capacity</p>
+          </div>
+          <label className="flex items-center space-x-2 cursor-pointer">
+            <input type="checkbox" checked={r2.enabled}
+              onChange={(e) => setFormData(prev => ({ ...prev, developerServices: { ...prev.developerServices, r2Storage: { ...prev.developerServices.r2Storage, enabled: e.target.checked } } }))}
+              className="w-5 h-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500" />
+            <span className="text-sm font-medium text-gray-700">Enable</span>
+          </label>
+        </div>
+        {r2.enabled && (
+          <div className="space-y-4 mt-4 pt-4 border-t border-gray-300">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Select Accounts with R2 Storage</label>
+              <p className="text-xs text-gray-500 mb-3">Choose which accounts have R2 Storage usage to track</p>
+              {formData.accountIds.filter(id => id.trim()).length === 0 ? (
+                <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+                  <p className="text-sm text-yellow-800">No accounts configured. Please add account IDs first.</p>
+                </div>
+              ) : (
+                <div className="space-y-2 bg-gray-50 rounded-lg p-4 max-h-48 overflow-y-auto">
+                  {formData.accountIds.filter(id => id.trim()).map((accountId) => (
+                    <label key={accountId} className="flex items-center space-x-3 p-2 hover:bg-gray-100 rounded cursor-pointer">
+                      <input type="checkbox" checked={r2.accountIds.includes(accountId)}
+                        onChange={(e) => {
+                          const newIds = e.target.checked ? [...r2.accountIds, accountId] : r2.accountIds.filter(id => id !== accountId);
+                          setFormData(prev => ({ ...prev, developerServices: { ...prev.developerServices, r2Storage: { ...prev.developerServices.r2Storage, accountIds: newIds } } }));
+                        }}
+                        className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500" />
+                      <span className="text-sm text-gray-700">{getAccountName(accountId)}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Class A Ops (millions)</label>
+                <input type="number" value={r2.classAOpsThreshold}
+                  onChange={(e) => setFormData(prev => ({ ...prev, developerServices: { ...prev.developerServices, r2Storage: { ...prev.developerServices.r2Storage, classAOpsThreshold: e.target.value } } }))}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent" placeholder="e.g., 10" min="0" />
+                <p className="text-xs text-gray-500 mt-1">Write/List/Delete</p>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Class B Ops (millions)</label>
+                <input type="number" value={r2.classBOpsThreshold}
+                  onChange={(e) => setFormData(prev => ({ ...prev, developerServices: { ...prev.developerServices, r2Storage: { ...prev.developerServices.r2Storage, classBOpsThreshold: e.target.value } } }))}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent" placeholder="e.g., 100" min="0" />
+                <p className="text-xs text-gray-500 mt-1">Read operations</p>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Storage (GB)</label>
+                <input type="number" value={r2.storageThreshold}
+                  onChange={(e) => setFormData(prev => ({ ...prev, developerServices: { ...prev.developerServices, r2Storage: { ...prev.developerServices.r2Storage, storageThreshold: e.target.value } } }))}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent" placeholder="e.g., 100" min="0" />
+                <p className="text-xs text-gray-500 mt-1">Total storage capacity</p>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // --- Legacy monolithic render functions (no longer called directly) ---
   // Application Services Configuration
   const renderApplicationServicesConfig = () => {
     const appServices = formData.applicationServices;
@@ -723,7 +1312,7 @@ function ConfigFormNew({ onSave, initialConfig, onCancel, cachedZones }) {
     return (
       <div className="space-y-8">
         {/* Core Section */}
-        <div className="border-b border-gray-200 pb-6">
+        <div className="bg-gray-50 border border-gray-200 rounded-lg p-5">
           <div className="flex items-start justify-between mb-4">
             <div>
               <h4 className="text-lg font-semibold text-gray-900">App Services Core</h4>
@@ -1287,18 +1876,394 @@ function ConfigFormNew({ onSave, initialConfig, onCancel, cachedZones }) {
           </div>
           </div>
         </div>
+
+        {/* Magic Transit Section */}
+        <div className="bg-gray-50 border border-gray-200 rounded-lg p-5">
+          <div className="flex items-start justify-between mb-4">
+            <div>
+              <h4 className="text-lg font-semibold text-gray-900">Magic Transit</h4>
+              <p className="text-sm text-gray-600 mt-1">
+                P95th bandwidth for Magic Transit tunnels
+              </p>
+            </div>
+            <label className="flex items-center space-x-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={formData.networkServices.magicTransit.enabled}
+                onChange={(e) => setFormData(prev => ({
+                  ...prev,
+                  networkServices: {
+                    ...prev.networkServices,
+                    magicTransit: {
+                      ...prev.networkServices.magicTransit,
+                      enabled: e.target.checked
+                    }
+                  }
+                }))}
+                className="w-5 h-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+              />
+              <span className="text-sm font-medium text-gray-700">Enable</span>
+            </label>
+          </div>
+
+          {formData.networkServices.magicTransit.enabled && (
+            <div className="space-y-4 mt-4 pt-4 border-t border-gray-300">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Select Accounts with Magic Transit
+                </label>
+                <p className="text-xs text-gray-500 mb-3">
+                  Choose which accounts have Magic Transit contracted
+                </p>
+                {formData.accountIds.filter(id => id.trim()).length === 0 ? (
+                  <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+                    <p className="text-sm text-yellow-800">
+                      No accounts configured. Please add account IDs first.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-2 bg-gray-50 rounded-lg p-4 max-h-48 overflow-y-auto">
+                    {formData.accountIds.filter(id => id.trim()).map((accountId) => {
+                      const isSelected = formData.networkServices.magicTransit.accountIds.includes(accountId);
+                      return (
+                        <label key={accountId} className="flex items-center space-x-3 p-2 hover:bg-gray-100 rounded cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={(e) => {
+                              const newAccountIds = e.target.checked
+                                ? [...formData.networkServices.magicTransit.accountIds, accountId]
+                                : formData.networkServices.magicTransit.accountIds.filter(id => id !== accountId);
+                              setFormData(prev => ({
+                                ...prev,
+                                networkServices: {
+                                  ...prev.networkServices,
+                                  magicTransit: {
+                                    ...prev.networkServices.magicTransit,
+                                    accountIds: newAccountIds
+                                  }
+                                }
+                              }));
+                            }}
+                            className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                          />
+                          <span className="text-sm text-gray-700">{getAccountName(accountId)}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                <label className="flex items-center space-x-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={formData.networkServices.magicTransit.egressEnabled || false}
+                    onChange={(e) => setFormData(prev => ({
+                      ...prev,
+                      networkServices: {
+                        ...prev.networkServices,
+                        magicTransit: {
+                          ...prev.networkServices.magicTransit,
+                          egressEnabled: e.target.checked
+                        }
+                      }
+                    }))}
+                    className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                  />
+                  <div>
+                    <span className="text-sm font-medium text-gray-900">Egress Enabled</span>
+                    <p className="text-xs text-gray-600 mt-0.5">
+                      Check if your contract includes egress bandwidth billing
+                    </p>
+                  </div>
+                </label>
+                {formData.networkServices.magicTransit.egressEnabled && (
+                  <div className="mt-4 pt-4 border-t border-blue-200">
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Egress Contracted Bandwidth (Mbps)
+                    </label>
+                    <input
+                      type="number"
+                      value={formData.networkServices.magicTransit.egressThreshold || ''}
+                      onChange={(e) => setFormData(prev => ({
+                        ...prev,
+                        networkServices: {
+                          ...prev.networkServices,
+                          magicTransit: {
+                            ...prev.networkServices.magicTransit,
+                            egressThreshold: e.target.value
+                          }
+                        }
+                      }))}
+                      className="w-full max-w-md px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      placeholder="e.g., 500"
+                      min="0"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">P95th egress bandwidth threshold in Mbps</p>
+                  </div>
+                )}
+              </div>
+
+              <div className="max-w-md">
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Contracted Bandwidth (Mbps)
+                </label>
+                <input
+                  type="number"
+                  value={formData.networkServices.magicTransit.threshold}
+                  onChange={(e) => setFormData(prev => ({
+                    ...prev,
+                    networkServices: {
+                      ...prev.networkServices,
+                      magicTransit: {
+                        ...prev.networkServices.magicTransit,
+                        threshold: e.target.value
+                      }
+                    }
+                  }))}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  placeholder="e.g., 1000"
+                  min="0"
+                />
+                <p className="text-xs text-gray-500 mt-1">P95th bandwidth threshold in Mbps</p>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     );
   };
 
-  // Zero Trust Configuration
+  // Cloudflare One Configuration (Zero Trust Seats + WAN)
+  const renderCloudflareOneConfig = () => {
+    const ztServices = formData.zeroTrust;
+    const netServices = formData.networkServices;
+
+    return (
+      <div className="space-y-8">
+        {/* Zero Trust Seats */}
+        <div className="bg-gray-50 border border-gray-200 rounded-lg p-5">
+          <div className="flex items-start justify-between mb-4">
+            <div>
+              <h4 className="text-lg font-semibold text-gray-900">Zero Trust Seats</h4>
+              <p className="text-sm text-gray-600 mt-1">
+                Active users consuming Access or Gateway seats
+              </p>
+            </div>
+            <label className="flex items-center space-x-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={ztServices.seats.enabled}
+                onChange={(e) => setFormData(prev => ({
+                  ...prev,
+                  zeroTrust: {
+                    ...prev.zeroTrust,
+                    seats: {
+                      ...prev.zeroTrust.seats,
+                      enabled: e.target.checked
+                    }
+                  }
+                }))}
+                className="w-5 h-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+              />
+              <span className="text-sm font-medium text-gray-700">Enable</span>
+            </label>
+          </div>
+
+          {ztServices.seats.enabled && (
+            <div className="space-y-4 mt-4 pt-4 border-t border-gray-300">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Select Accounts with Zero Trust Seats
+                </label>
+                <p className="text-xs text-gray-500 mb-3">
+                  Choose which accounts have Enterprise Zero Trust seats contracted
+                </p>
+                {formData.accountIds.filter(id => id.trim()).length === 0 ? (
+                  <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+                    <p className="text-sm text-yellow-800">
+                      No accounts configured. Please add account IDs first.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-2 bg-gray-50 rounded-lg p-4 max-h-48 overflow-y-auto">
+                    {formData.accountIds.filter(id => id.trim()).map((accountId) => {
+                      const isSelected = ztServices.seats.accountIds.includes(accountId);
+                      return (
+                        <label key={accountId} className="flex items-center space-x-3 p-2 hover:bg-gray-100 rounded cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={(e) => {
+                              const newAccountIds = e.target.checked
+                                ? [...ztServices.seats.accountIds, accountId]
+                                : ztServices.seats.accountIds.filter(id => id !== accountId);
+                              setFormData(prev => ({
+                                ...prev,
+                                zeroTrust: {
+                                  ...prev.zeroTrust,
+                                  seats: {
+                                    ...prev.zeroTrust.seats,
+                                    accountIds: newAccountIds
+                                  }
+                                }
+                              }));
+                            }}
+                            className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                          />
+                          <span className="text-sm text-gray-700">{getAccountName(accountId)}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              <div className="max-w-md">
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Contracted Seats
+                </label>
+                <input
+                  type="number"
+                  value={ztServices.seats.threshold}
+                  onChange={(e) => setFormData(prev => ({
+                    ...prev,
+                    zeroTrust: {
+                      ...prev.zeroTrust,
+                      seats: {
+                        ...prev.zeroTrust.seats,
+                        threshold: e.target.value
+                      }
+                    }
+                  }))}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  placeholder="e.g., 100"
+                  min="0"
+                />
+                <p className="text-xs text-gray-500 mt-1">Total contracted seats across selected accounts</p>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* WAN */}
+        <div className="bg-gray-50 border border-gray-200 rounded-lg p-5">
+          <div className="flex items-start justify-between mb-4">
+            <div>
+              <h4 className="text-lg font-semibold text-gray-900">WAN</h4>
+              <p className="text-sm text-gray-600 mt-1">
+                P95th bandwidth for WAN tunnels
+              </p>
+            </div>
+            <label className="flex items-center space-x-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={netServices.magicWan.enabled}
+                onChange={(e) => setFormData(prev => ({
+                  ...prev,
+                  networkServices: {
+                    ...prev.networkServices,
+                    magicWan: {
+                      ...prev.networkServices.magicWan,
+                      enabled: e.target.checked
+                    }
+                  }
+                }))}
+                className="w-5 h-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+              />
+              <span className="text-sm font-medium text-gray-700">Enable</span>
+            </label>
+          </div>
+
+          {netServices.magicWan.enabled && (
+            <div className="space-y-4 mt-4 pt-4 border-t border-gray-300">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Select Accounts with WAN
+                </label>
+                <p className="text-xs text-gray-500 mb-3">
+                  Choose which accounts have WAN contracted
+                </p>
+                {formData.accountIds.filter(id => id.trim()).length === 0 ? (
+                  <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+                    <p className="text-sm text-yellow-800">
+                      No accounts configured. Please add account IDs first.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-2 bg-gray-50 rounded-lg p-4 max-h-48 overflow-y-auto">
+                    {formData.accountIds.filter(id => id.trim()).map((accountId) => {
+                      const isSelected = netServices.magicWan.accountIds.includes(accountId);
+                      return (
+                        <label key={accountId} className="flex items-center space-x-3 p-2 hover:bg-gray-100 rounded cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={(e) => {
+                              const newAccountIds = e.target.checked
+                                ? [...netServices.magicWan.accountIds, accountId]
+                                : netServices.magicWan.accountIds.filter(id => id !== accountId);
+                              setFormData(prev => ({
+                                ...prev,
+                                networkServices: {
+                                  ...prev.networkServices,
+                                  magicWan: {
+                                    ...prev.networkServices.magicWan,
+                                    accountIds: newAccountIds
+                                  }
+                                }
+                              }));
+                            }}
+                            className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                          />
+                          <span className="text-sm text-gray-700">{getAccountName(accountId)}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              <div className="max-w-md">
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Contracted Bandwidth (Mbps)
+                </label>
+                <input
+                  type="number"
+                  value={netServices.magicWan.threshold}
+                  onChange={(e) => setFormData(prev => ({
+                    ...prev,
+                    networkServices: {
+                      ...prev.networkServices,
+                      magicWan: {
+                        ...prev.networkServices.magicWan,
+                        threshold: e.target.value
+                      }
+                    }
+                  }))}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  placeholder="e.g., 1000"
+                  min="0"
+                />
+                <p className="text-xs text-gray-500 mt-1">P95th bandwidth threshold in Mbps</p>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  // Old Zero Trust Config - replaced by renderCloudflareOneConfig
   const renderZeroTrustConfig = () => {
     const ztServices = formData.zeroTrust;
     
     return (
       <div className="space-y-8">
         {/* Seats Section */}
-        <div className="border-b border-gray-200 pb-6">
+        <div className="bg-gray-50 border border-gray-200 rounded-lg p-5">
           <div className="flex items-start justify-between mb-4">
             <div>
               <h4 className="text-lg font-semibold text-gray-900">Zero Trust Seats</h4>
@@ -1421,7 +2386,7 @@ function ConfigFormNew({ onSave, initialConfig, onCancel, cachedZones }) {
       const service = netServices[serviceKey];
       
       return (
-        <div className="border-b border-gray-200 pb-6 mb-6 last:border-b-0 last:pb-0 last:mb-0">
+        <div className="bg-gray-50 border border-gray-200 rounded-lg p-5">
           <div className="flex items-start justify-between mb-4">
             <div>
               <h4 className="text-lg font-semibold text-gray-900">{serviceName}</h4>
@@ -1505,6 +2470,62 @@ function ConfigFormNew({ onSave, initialConfig, onCancel, cachedZones }) {
                 )}
               </div>
 
+              {/* Egress Option (Magic Transit only) */}
+              {serviceKey === 'magicTransit' && (
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                  <label className="flex items-center space-x-3 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={service.egressEnabled || false}
+                      onChange={(e) => setFormData(prev => ({
+                        ...prev,
+                        networkServices: {
+                          ...prev.networkServices,
+                          [serviceKey]: {
+                            ...prev.networkServices[serviceKey],
+                            egressEnabled: e.target.checked
+                          }
+                        }
+                      }))}
+                      className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                    />
+                    <div>
+                      <span className="text-sm font-medium text-gray-900">Egress Enabled</span>
+                      <p className="text-xs text-gray-600 mt-0.5">
+                        Check this if your Magic Transit contract includes egress bandwidth billing
+                      </p>
+                    </div>
+                  </label>
+                  
+                  {/* Egress Threshold - only show when egress is enabled */}
+                  {service.egressEnabled && (
+                    <div className="mt-4 pt-4 border-t border-blue-200">
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Egress Contracted Bandwidth (Mbps)
+                      </label>
+                      <input
+                        type="number"
+                        value={service.egressThreshold || ''}
+                        onChange={(e) => setFormData(prev => ({
+                          ...prev,
+                          networkServices: {
+                            ...prev.networkServices,
+                            [serviceKey]: {
+                              ...prev.networkServices[serviceKey],
+                              egressThreshold: e.target.value
+                            }
+                          }
+                        }))}
+                        className="w-full max-w-md px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        placeholder="e.g., 500"
+                        min="0"
+                      />
+                      <p className="text-xs text-gray-500 mt-1">P95th egress bandwidth threshold in Mbps</p>
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Threshold */}
               <div className="max-w-md">
                 <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -1539,6 +2560,316 @@ function ConfigFormNew({ onSave, initialConfig, onCancel, cachedZones }) {
       <div className="space-y-8">
         {renderAccountSelector('magicTransit', 'Magic Transit')}
         {renderAccountSelector('magicWan', 'Magic WAN')}
+      </div>
+    );
+  };
+
+  // Developer Platform Configuration
+  const renderDeveloperPlatformConfig = () => {
+    const devServices = formData.developerServices;
+    
+    return (
+      <div className="space-y-8">
+        {/* Workers & Pages Section */}
+        <div className="bg-gray-50 border border-gray-200 rounded-lg p-5">
+          <div className="flex items-start justify-between mb-4">
+            <div>
+              <h4 className="text-lg font-semibold text-gray-900">Workers & Pages</h4>
+              <p className="text-sm text-gray-600 mt-1">
+                Serverless compute requests and CPU time
+              </p>
+            </div>
+            <label className="flex items-center space-x-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={devServices.workersPages.enabled}
+                onChange={(e) => setFormData(prev => ({
+                  ...prev,
+                  developerServices: {
+                    ...prev.developerServices,
+                    workersPages: {
+                      ...prev.developerServices.workersPages,
+                      enabled: e.target.checked
+                    }
+                  }
+                }))}
+                className="w-5 h-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+              />
+              <span className="text-sm font-medium text-gray-700">Enable</span>
+            </label>
+          </div>
+
+          {devServices.workersPages.enabled && (
+            <div className="space-y-4 mt-4 pt-4 border-t border-gray-300">
+              {/* Account Selection */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Select Accounts with Workers & Pages
+                </label>
+                <p className="text-xs text-gray-500 mb-3">
+                  Choose which accounts have Workers & Pages usage to track
+                </p>
+                
+                {formData.accountIds.filter(id => id.trim()).length === 0 ? (
+                  <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+                    <p className="text-sm text-yellow-800">
+                      No accounts configured. Please add account IDs in the Account IDs step first.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-2 bg-gray-50 rounded-lg p-4 max-h-48 overflow-y-auto">
+                    {formData.accountIds.filter(id => id.trim()).map((accountId) => {
+                      const isSelected = devServices.workersPages.accountIds.includes(accountId);
+                      
+                      return (
+                        <label 
+                          key={accountId} 
+                          className="flex items-center space-x-3 p-2 hover:bg-gray-100 rounded cursor-pointer"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={(e) => {
+                              const newAccountIds = e.target.checked
+                                ? [...devServices.workersPages.accountIds, accountId]
+                                : devServices.workersPages.accountIds.filter(id => id !== accountId);
+                              
+                              setFormData(prev => ({
+                                ...prev,
+                                developerServices: {
+                                  ...prev.developerServices,
+                                  workersPages: {
+                                    ...prev.developerServices.workersPages,
+                                    accountIds: newAccountIds
+                                  }
+                                }
+                              }));
+                            }}
+                            className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                          />
+                          <span className="text-sm text-gray-700">{getAccountName(accountId)}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* Requests Threshold */}
+              <div className="max-w-md">
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Contracted Requests (millions)
+                </label>
+                <input
+                  type="number"
+                  value={devServices.workersPages.requestsThreshold}
+                  onChange={(e) => setFormData(prev => ({
+                    ...prev,
+                    developerServices: {
+                      ...prev.developerServices,
+                      workersPages: {
+                        ...prev.developerServices.workersPages,
+                        requestsThreshold: e.target.value
+                      }
+                    }
+                  }))}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  placeholder="e.g., 50"
+                  min="0"
+                />
+                <p className="text-xs text-gray-500 mt-1">Monthly request threshold in millions</p>
+              </div>
+
+              {/* CPU Time Threshold */}
+              <div className="max-w-md">
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Contracted CPU Time (million ms)
+                </label>
+                <input
+                  type="number"
+                  value={devServices.workersPages.cpuTimeThreshold}
+                  onChange={(e) => setFormData(prev => ({
+                    ...prev,
+                    developerServices: {
+                      ...prev.developerServices,
+                      workersPages: {
+                        ...prev.developerServices.workersPages,
+                        cpuTimeThreshold: e.target.value
+                      }
+                    }
+                  }))}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  placeholder="e.g., 100"
+                  min="0"
+                />
+                <p className="text-xs text-gray-500 mt-1">Monthly CPU time threshold in million milliseconds</p>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* R2 Storage Section */}
+        <div className="bg-gray-50 border border-gray-200 rounded-lg p-5">
+          <div className="flex items-start justify-between mb-4">
+            <div>
+              <h4 className="text-lg font-semibold text-gray-900">R2 Storage</h4>
+              <p className="text-sm text-gray-600 mt-1">
+                Object storage operations and capacity
+              </p>
+            </div>
+            <label className="flex items-center space-x-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={devServices.r2Storage.enabled}
+                onChange={(e) => setFormData(prev => ({
+                  ...prev,
+                  developerServices: {
+                    ...prev.developerServices,
+                    r2Storage: {
+                      ...prev.developerServices.r2Storage,
+                      enabled: e.target.checked
+                    }
+                  }
+                }))}
+                className="w-5 h-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+              />
+              <span className="text-sm font-medium text-gray-700">Enable</span>
+            </label>
+          </div>
+
+          {devServices.r2Storage.enabled && (
+            <div className="space-y-4 mt-4 pt-4 border-t border-gray-300">
+              {/* Account Selection */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Select Accounts with R2 Storage
+                </label>
+                <p className="text-xs text-gray-500 mb-3">
+                  Choose which accounts have R2 Storage usage to track
+                </p>
+                
+                {formData.accountIds.filter(id => id.trim()).length === 0 ? (
+                  <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+                    <p className="text-sm text-yellow-800">
+                      No accounts configured. Please add account IDs in the Account IDs step first.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-2 bg-gray-50 rounded-lg p-4 max-h-48 overflow-y-auto">
+                    {formData.accountIds.filter(id => id.trim()).map((accountId) => {
+                      const isSelected = devServices.r2Storage.accountIds.includes(accountId);
+                      
+                      return (
+                        <label 
+                          key={accountId} 
+                          className="flex items-center space-x-3 p-2 hover:bg-gray-100 rounded cursor-pointer"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={(e) => {
+                              const newAccountIds = e.target.checked
+                                ? [...devServices.r2Storage.accountIds, accountId]
+                                : devServices.r2Storage.accountIds.filter(id => id !== accountId);
+                              
+                              setFormData(prev => ({
+                                ...prev,
+                                developerServices: {
+                                  ...prev.developerServices,
+                                  r2Storage: {
+                                    ...prev.developerServices.r2Storage,
+                                    accountIds: newAccountIds
+                                  }
+                                }
+                              }));
+                            }}
+                            className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                          />
+                          <span className="text-sm text-gray-700">{getAccountName(accountId)}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* Class A Operations Threshold */}
+              <div className="max-w-md">
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Contracted Class A Operations (millions)
+                </label>
+                <input
+                  type="number"
+                  value={devServices.r2Storage.classAOpsThreshold}
+                  onChange={(e) => setFormData(prev => ({
+                    ...prev,
+                    developerServices: {
+                      ...prev.developerServices,
+                      r2Storage: {
+                        ...prev.developerServices.r2Storage,
+                        classAOpsThreshold: e.target.value
+                      }
+                    }
+                  }))}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  placeholder="e.g., 10"
+                  min="0"
+                />
+                <p className="text-xs text-gray-500 mt-1">Monthly Class A operations threshold in millions (list, write, delete)</p>
+              </div>
+
+              {/* Class B Operations Threshold */}
+              <div className="max-w-md">
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Contracted Class B Operations (millions)
+                </label>
+                <input
+                  type="number"
+                  value={devServices.r2Storage.classBOpsThreshold}
+                  onChange={(e) => setFormData(prev => ({
+                    ...prev,
+                    developerServices: {
+                      ...prev.developerServices,
+                      r2Storage: {
+                        ...prev.developerServices.r2Storage,
+                        classBOpsThreshold: e.target.value
+                      }
+                    }
+                  }))}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  placeholder="e.g., 100"
+                  min="0"
+                />
+                <p className="text-xs text-gray-500 mt-1">Monthly Class B operations threshold in millions (read)</p>
+              </div>
+
+              {/* Storage Threshold */}
+              <div className="max-w-md">
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Contracted Storage (GB)
+                </label>
+                <input
+                  type="number"
+                  value={devServices.r2Storage.storageThreshold}
+                  onChange={(e) => setFormData(prev => ({
+                    ...prev,
+                    developerServices: {
+                      ...prev.developerServices,
+                      r2Storage: {
+                        ...prev.developerServices.r2Storage,
+                        storageThreshold: e.target.value
+                      }
+                    }
+                  }))}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  placeholder="e.g., 500"
+                  min="0"
+                />
+                <p className="text-xs text-gray-500 mt-1">Total storage capacity threshold in GB</p>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     );
   };

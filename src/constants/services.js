@@ -5,9 +5,8 @@
 
 export const SERVICE_CATEGORIES = {
   APPLICATION_SERVICES: 'application_services',
-  ZERO_TRUST: 'zero_trust',
-  NETWORK_SERVICES: 'network_services',
-  DEVELOPER_SERVICES: 'developer_services',
+  CLOUDFLARE_ONE: 'cloudflare_one',
+  DEVELOPER_PLATFORM: 'developer_platform',
 };
 
 export const SERVICE_METADATA = {
@@ -17,22 +16,16 @@ export const SERVICE_METADATA = {
     description: 'WAF, DDoS, CDN, and application performance',
     icon: '🛡️',
   },
-  [SERVICE_CATEGORIES.ZERO_TRUST]: {
-    id: SERVICE_CATEGORIES.ZERO_TRUST,
-    name: 'Zero Trust Services',
-    description: 'Access, Gateway, WARP, and device security',
+  [SERVICE_CATEGORIES.CLOUDFLARE_ONE]: {
+    id: SERVICE_CATEGORIES.CLOUDFLARE_ONE,
+    name: 'Cloudflare One',
+    description: 'Zero Trust access, gateway, and WAN connectivity',
     icon: '🔐',
   },
-  [SERVICE_CATEGORIES.NETWORK_SERVICES]: {
-    id: SERVICE_CATEGORIES.NETWORK_SERVICES,
-    name: 'Network Services',
-    description: 'Magic Transit, Spectrum, and network infrastructure',
-    icon: '🌐',
-  },
-  [SERVICE_CATEGORIES.DEVELOPER_SERVICES]: {
-    id: SERVICE_CATEGORIES.DEVELOPER_SERVICES,
-    name: 'Developer Services',
-    description: 'Workers, Pages, R2, D1, and developer platform',
+  [SERVICE_CATEGORIES.DEVELOPER_PLATFORM]: {
+    id: SERVICE_CATEGORIES.DEVELOPER_PLATFORM,
+    name: 'Developer Platform',
+    description: 'Workers, Pages, R2, and developer tools',
     icon: '⚡',
   },
 };
@@ -139,33 +132,20 @@ export const ZERO_TRUST_SKUS = {
   },
 };
 
-export const NETWORK_SERVICES_SKUS = {
-  MAGIC_TRANSIT: {
-    id: 'magicTransit',
-    name: 'Magic Transit',
-    description: 'P95th bandwidth for Magic Transit tunnels',
-    type: SKU_TYPES.ACCOUNT_LEVEL,
-    unit: 'Mbps',
-    category: SERVICE_CATEGORIES.NETWORK_SERVICES,
-    section: 'core',
-  },
-  MAGIC_WAN: {
+export const CLOUDFLARE_ONE_SKUS = {
+  ...ZERO_TRUST_SKUS,
+  WAN: {
     id: 'magicWan',
-    name: 'Magic WAN',
-    description: 'P95th bandwidth for Magic WAN tunnels',
+    name: 'WAN',
+    description: 'P95th bandwidth for WAN tunnels',
     type: SKU_TYPES.ACCOUNT_LEVEL,
     unit: 'Mbps',
-    category: SERVICE_CATEGORIES.NETWORK_SERVICES,
+    category: SERVICE_CATEGORIES.CLOUDFLARE_ONE,
     section: 'core',
   },
 };
 
-export const DEVELOPER_SERVICES_SKUS = {
-  // Will be added later
-  // Example:
-  // WORKERS_REQUESTS: { ... }
-  // R2_STORAGE: { ... }
-};
+export const DEVELOPER_PLATFORM_SKUS = {};
 
 /**
  * Get all SKUs for a service category
@@ -174,12 +154,10 @@ export function getSKUsForService(serviceId) {
   switch (serviceId) {
     case SERVICE_CATEGORIES.APPLICATION_SERVICES:
       return APPLICATION_SERVICES_SKUS;
-    case SERVICE_CATEGORIES.ZERO_TRUST:
-      return ZERO_TRUST_SKUS;
-    case SERVICE_CATEGORIES.NETWORK_SERVICES:
-      return NETWORK_SERVICES_SKUS;
-    case SERVICE_CATEGORIES.DEVELOPER_SERVICES:
-      return DEVELOPER_SERVICES_SKUS;
+    case SERVICE_CATEGORIES.CLOUDFLARE_ONE:
+      return CLOUDFLARE_ONE_SKUS;
+    case SERVICE_CATEGORIES.DEVELOPER_PLATFORM:
+      return DEVELOPER_PLATFORM_SKUS;
     default:
       return {};
   }
