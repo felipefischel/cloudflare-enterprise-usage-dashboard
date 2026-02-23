@@ -72,6 +72,16 @@ export function formatRequests(requests, decimals = 2) {
 }
 
 /**
+ * Format storage in MB to human-readable (B, KB, MB, GB)
+ */
+export function formatStorageMB(mb) {
+  if (mb >= 1000) return `${(mb / 1000).toFixed(2)} GB`;
+  if (mb >= 1) return `${mb.toFixed(2)} MB`;
+  if (mb >= 0.001) return `${(mb * 1000).toFixed(2)} KB`;
+  return `${(mb * 1000000).toFixed(2)} B`;
+}
+
+/**
  * Format bandwidth (shows GB for < 1TB, TB for >= 1TB)
  * Uses decimal units (1 TB = 1000^4 bytes) as is standard for bandwidth/storage
  */

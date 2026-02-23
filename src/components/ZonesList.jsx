@@ -1,6 +1,6 @@
 import React from 'react';
 
-function ZonesList({ zones, zoneMetrics, usePreviousClassification = false, previousMonthMetrics = null }) {
+function ZonesList({ zones, zoneMetrics, usePreviousClassification = false, previousMonthMetrics = null, visibleColumns = ['type', 'bandwidth', 'requests', 'dns'] }) {
   if (!zones || zones.length === 0) {
     return null;
   }
@@ -23,8 +23,12 @@ function ZonesList({ zones, zoneMetrics, usePreviousClassification = false, prev
     };
   });
 
-  // Sort by bandwidth (highest first)
-  const sortedZones = [...zonesWithMetrics].sort((a, b) => (b.bytes || 0) - (a.bytes || 0));
+  const sortedZones = [...zonesWithMetrics].sort((a, b) => {
+    if (visibleColumns.includes('dns') && !visibleColumns.includes('requests') && !visibleColumns.includes('bandwidth')) {
+      return (b.dnsQueries || 0) - (a.dnsQueries || 0);
+    }
+    return (b.bytes || 0) - (a.bytes || 0);
+  });
 
   const formatBandwidth = (bytes) => {
     if (!bytes) return '0 GB';
@@ -76,18 +80,26 @@ function ZonesList({ zones, zoneMetrics, usePreviousClassification = false, prev
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                 Zone
               </th>
-              <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Type
-              </th>
-              <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Data Transfer
-              </th>
-              <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                HTTP Requests
-              </th>
-              <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                DNS Queries
-              </th>
+              {visibleColumns.includes('type') && (
+                <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Type
+                </th>
+              )}
+              {visibleColumns.includes('bandwidth') && (
+                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Data Transfer
+                </th>
+              )}
+              {visibleColumns.includes('requests') && (
+                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  HTTP Requests
+                </th>
+              )}
+              {visibleColumns.includes('dns') && (
+                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  DNS Queries
+                </th>
+              )}
             </tr>
           </thead>
           <tbody className="bg-white divide-y divide-gray-200">
@@ -96,26 +108,34 @@ function ZonesList({ zones, zoneMetrics, usePreviousClassification = false, prev
                 <td className="px-6 py-4 whitespace-nowrap">
                   <div className="text-sm font-medium text-gray-900">{zone.name}</div>
                 </td>
-                <td className="px-6 py-4 whitespace-nowrap text-center">
-                  {zone.isPrimary !== undefined && (
-                    <span className={`px-2 py-1 text-xs font-medium rounded ${
-                      zone.isPrimary 
-                        ? 'bg-green-100 text-green-700' 
-                        : 'bg-blue-100 text-blue-700'
-                    }`}>
-                      {zone.isPrimary ? 'Primary' : 'Secondary'}
-                    </span>
-                  )}
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-900 font-medium">
-                  {formatBandwidth(zone.bytes)}
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-900 font-medium">
-                  {formatRequests(zone.requests || 0)}
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-900 font-medium">
-                  {formatRequests(zone.dnsQueries || 0)}
-                </td>
+                {visibleColumns.includes('type') && (
+                  <td className="px-6 py-4 whitespace-nowrap text-center">
+                    {zone.isPrimary !== undefined && (
+                      <span className={`px-2 py-1 text-xs font-medium rounded ${
+                        zone.isPrimary 
+                          ? 'bg-green-100 text-green-700' 
+                          : 'bg-blue-100 text-blue-700'
+                      }`}>
+                        {zone.isPrimary ? 'Primary' : 'Secondary'}
+                      </span>
+                    )}
+                  </td>
+                )}
+                {visibleColumns.includes('bandwidth') && (
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-900 font-medium">
+                    {formatBandwidth(zone.bytes)}
+                  </td>
+                )}
+                {visibleColumns.includes('requests') && (
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-900 font-medium">
+                    {formatRequests(zone.requests || 0)}
+                  </td>
+                )}
+                {visibleColumns.includes('dns') && (
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-900 font-medium">
+                    {formatRequests(zone.dnsQueries || 0)}
+                  </td>
+                )}
               </tr>
             ))}
           </tbody>

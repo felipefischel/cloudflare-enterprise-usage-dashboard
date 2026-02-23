@@ -44,6 +44,18 @@ function ConsolidatedCard({
       case 'shield': return <Shield className="w-5 h-5" />;
       case 'dns': return <Network className="w-5 h-5" />;
       case 'users': return <Users className="w-5 h-5" />;
+      case 'table': return <Database className="w-5 h-5" />;
+      case 'storage-mb': return <Database className="w-5 h-5" />;
+      case 'minutes': return <Activity className="w-5 h-5" />;
+      case 'images': return <Globe className="w-5 h-5" />;
+      case 'neurons': return <Activity className="w-5 h-5" />;
+      case 'operations': return <Activity className="w-5 h-5" />;
+      case 'events': return <Activity className="w-5 h-5" />;
+      case 'connections': return <Network className="w-5 h-5" />;
+      case 'endpoints': return <Network className="w-5 h-5" />;
+      case 'hostnames': return <Globe className="w-5 h-5" />;
+      case 'mb-days': return <Database className="w-5 h-5" />;
+      case 'cr-storage': return <Database className="w-5 h-5" />;
       default: return <Activity className="w-5 h-5" />;
     }
   };
@@ -74,10 +86,40 @@ function ConsolidatedCard({
       return formatLargeNumber(value, 'ops');
     } else if (icon === 'cpu') {
       return formatLargeNumber(value, 'ms');
+    } else if (icon === 'table') {
+      if (value >= 1e9) return `${cleanNumber(value / 1e9)}B`;
+      if (value >= 1e6) return `${cleanNumber(value / 1e6)}M`;
+      if (value >= 1e3) return `${cleanNumber(value / 1e3)}K`;
+      return cleanNumber(value);
+    } else if (icon === 'storage-mb') {
+      if (value >= 1000) return `${cleanNumber(value / 1000)} GB`;
+      return `${cleanNumber(value)} MB`;
+    } else if (icon === 'minutes') {
+      return formatLargeNumber(value, 'min');
+    } else if (icon === 'images') {
+      return formatLargeNumber(value, 'images');
+    } else if (icon === 'neurons') {
+      return formatLargeNumber(value, 'neurons');
+    } else if (icon === 'operations') {
+      return formatLargeNumber(value, 'ops');
+    } else if (icon === 'events') {
+      return formatLargeNumber(value, 'events');
+    } else if (icon === 'connections') {
+      return formatLargeNumber(value, 'conns');
+    } else if (icon === 'mb-days') {
+      if (value >= 1e6) return `${cleanNumber(value / 1e6)} TB-days`;
+      if (value >= 1e3) return `${cleanNumber(value / 1e3)} GB-days`;
+      return `${cleanNumber(value)} MB-days`;
+    } else if (icon === 'cr-storage') {
+      if (value >= 1000) return `${cleanNumber(value / 1000)} PB`;
+      if (value >= 1) return `${cleanNumber(value)} TB`;
+      return `${cleanNumber(value * 1000)} GB`;
     } else if (icon === 'database') {
       return `${cleanNumber(value)} GB`;
     } else if (icon === 'zones') {
       return `${value.toLocaleString()} zones`;
+    } else if (icon === 'endpoints') {
+      return `${value.toLocaleString()} endpoints`;
     } else if (icon === 'users') {
       return `${value.toLocaleString()} seats`;
     }
@@ -186,7 +228,7 @@ function ConsolidatedCard({
                 isWarning ? 'text-orange-700' :
                 'text-gray-900'
               }`}>
-                {numPercentage.toFixed(1)}%
+                {numPercentage < 0.1 && numPercentage > 0 ? '<0.1' : numPercentage.toFixed(1)}%
               </span>
             </div>
             <div className="w-full bg-gray-200 rounded-full h-2.5 overflow-hidden">

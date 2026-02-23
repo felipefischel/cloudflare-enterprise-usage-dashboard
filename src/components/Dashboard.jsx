@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import ConsolidatedCard from './ConsolidatedCard';
 import ZonesList from './ZonesList';
 import { RefreshCw, AlertCircle, Bell, BellOff, Filter, ChevronRight, Info } from 'lucide-react';
-import { formatNumber, formatRequests, formatBandwidthTB, formatBytes } from '../utils/formatters';
+import { formatNumber, formatRequests, formatBandwidthTB, formatBytes, formatStorageMB } from '../utils/formatters';
 import { SERVICE_CATEGORIES, SERVICE_METADATA } from '../constants/services';
 
 function Dashboard({ config, zones, setZones, refreshTrigger }) {
@@ -19,6 +19,7 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
   const [zonesViewMode, setZonesViewMode] = useState('current');
   const [prewarming, setPrewarming] = useState(false);
   const [isInitialSetup, setIsInitialSetup] = useState(false);
+  const [showAlertPopover, setShowAlertPopover] = useState(false);
 
   useEffect(() => {
     // Load alerts state from config
@@ -103,11 +104,6 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
         }
         setLastChecked(new Date());
         
-        // Check thresholds if configured
-        if (config.slackWebhook && alertsEnabled) {
-          checkThresholds(phase1Data, zonesData);
-        }
-        
         setLoading(false);
         setLoadingPhase(null);
         return;
@@ -173,10 +169,6 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
       setMetrics(phase3Data);
       setLastChecked(new Date());
 
-      // Check thresholds if configured
-      if (config.slackWebhook && alertsEnabled) {
-        checkThresholds(phase3Data, zonesData);
-      }
     } catch (err) {
       console.error('Error fetching data:', err);
       setError(err.message || 'Failed to fetch data from Cloudflare API');
@@ -186,57 +178,208 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
     }
   };
 
-  const checkThresholds = async (metricsData, zonesData, forceTest = false) => {
+  const buildSkuMetrics = (metricsData, zonesData) => {
+    const skus = [];
+    const fmtNum = (v) => { if (v >= 1e9) return `${(v/1e9).toFixed(2)}B`; if (v >= 1e6) return `${(v/1e6).toFixed(2)}M`; if (v >= 1e3) return `${(v/1e3).toFixed(1)}K`; return String(Math.round(v)); };
+    const fmtBytes = (b) => { if (b >= 1e12) return `${(b/1e12).toFixed(2)} TB`; if (b >= 1e9) return `${(b/1e9).toFixed(2)} GB`; if (b >= 1e6) return `${(b/1e6).toFixed(2)} MB`; return `${b} B`; };
+    const fmtGB = (gb) => gb >= 1000 ? `${(gb/1000).toFixed(2)} TB` : `${gb.toFixed(2)} GB`;
+    const fmtMB = (mb) => mb >= 1000 ? fmtGB(mb / 1000) : `${mb.toFixed(2)} MB`;
+    const fmtMin = (m) => m >= 1e6 ? `${(m/1e6).toFixed(2)}M min` : m >= 1e3 ? `${(m/1e3).toFixed(1)}K min` : `${Math.round(m)} min`;
+    const fmtBw = (m) => m >= 1000 ? `${(m/1000).toFixed(2)} Gbps` : `${m.toFixed(2)} Mbps`;
+    const pct = (cur, thr) => thr ? (cur / thr) * 100 : 0;
+    const add = (key, name, category, current, threshold, formatted, thresholdFormatted) => {
+      if (current !== undefined && current !== null) {
+        skus.push({ key, name, category, current, threshold: threshold || null, formatted, thresholdFormatted: thresholdFormatted || '', percentage: threshold ? pct(current, threshold) : 0 });
+      }
+    };
+
+    const appCfg = config?.applicationServices || {};
+    const zc = zonesData?.enterprise || 0;
+    const zt = appCfg.core?.thresholdZones || config?.thresholdZones;
+    add('zones', 'Enterprise Zones', 'Zones & Traffic', zc, zt, `${zc} zones`, zt ? `${zt} zones` : '');
+    const rc = metricsData?.current?.requests || 0;
+    const rt = appCfg.core?.thresholdRequests || config?.thresholdRequests;
+    add('requests', 'HTTP Requests', 'Zones & Traffic', rc, rt, fmtNum(rc), rt ? fmtNum(rt) : '');
+    const bc = metricsData?.current?.bytes || 0;
+    const bt = appCfg.core?.thresholdBandwidth || config?.thresholdBandwidth;
+    add('bandwidth', 'Data Transfer', 'Zones & Traffic', bc, bt, fmtBytes(bc), bt ? fmtBytes(bt) : '');
+    const dc = metricsData?.current?.dnsQueries || 0;
+    const dt = appCfg.core?.thresholdDnsQueries || config?.thresholdDnsQueries;
+    add('dnsQueries', 'DNS Queries', 'Zones & Traffic', dc, dt, fmtNum(dc), dt ? fmtNum(dt) : '');
+
+    if (metricsData?.botManagement?.enabled) {
+      const c = metricsData.botManagement.current?.likelyHuman || 0, t = appCfg.botManagement?.threshold;
+      add('botManagement', 'Bot Management', 'Application Security', c, t, fmtNum(c), t ? fmtNum(t) : '');
+    }
+    if (metricsData?.apiShield?.enabled) {
+      const c = metricsData.apiShield.current?.requests || 0, t = appCfg.apiShield?.threshold;
+      add('apiShield', 'API Shield', 'Application Security', c, t, fmtNum(c), t ? fmtNum(t) : '');
+    }
+    if (metricsData?.pageShield?.enabled) {
+      const c = metricsData.pageShield.current?.requests || 0, t = appCfg.pageShield?.threshold;
+      add('pageShield', 'Page Shield', 'Application Security', c, t, fmtNum(c), t ? fmtNum(t) : '');
+    }
+    if (metricsData?.advancedRateLimiting?.enabled) {
+      const c = metricsData.advancedRateLimiting.current?.requests || 0, t = appCfg.advancedRateLimiting?.threshold;
+      add('advancedRateLimiting', 'Adv. Rate Limiting', 'Application Security', c, t, fmtNum(c), t ? fmtNum(t) : '');
+    }
+    if (metricsData?.argo?.enabled) {
+      const c = metricsData.argo.current?.bytes || 0, t = appCfg.argo?.threshold;
+      add('argo', 'Argo Smart Routing', 'Delivery & Performance', c, t, fmtBytes(c), t ? fmtBytes(t) : '');
+    }
+    if (metricsData?.cacheReserve?.enabled) {
+      const cr = metricsData.cacheReserve, cfg = appCfg.cacheReserve || {};
+      const crGB = cr.current?.storageGBDays || 0;
+      const crThr = cfg.storageThreshold ? cfg.storageThreshold * 1000 : null;
+      add('cacheReserve-storage', 'Cache Reserve — Storage', 'Delivery & Performance', crGB, crThr, crGB >= 1000 ? `${(crGB/1000).toFixed(2)} TB` : `${crGB.toFixed(2)} GB`, crThr ? (crThr >= 1000 ? `${(crThr/1000).toFixed(2)} TB` : `${crThr.toFixed(2)} GB`) : '');
+      add('cacheReserve-classA', 'Cache Reserve — Class A Ops', 'Delivery & Performance', cr.current?.classAOps || 0, cfg.classAOpsThreshold, fmtNum(cr.current?.classAOps || 0), cfg.classAOpsThreshold ? fmtNum(cfg.classAOpsThreshold) : '');
+      add('cacheReserve-classB', 'Cache Reserve — Class B Ops', 'Delivery & Performance', cr.current?.classBOps || 0, cfg.classBOpsThreshold, fmtNum(cr.current?.classBOps || 0), cfg.classBOpsThreshold ? fmtNum(cfg.classBOpsThreshold) : '');
+    }
+    if (metricsData?.loadBalancing?.enabled) {
+      const c = metricsData.loadBalancing.current?.endpoints || 0, t = appCfg.loadBalancing?.threshold;
+      add('loadBalancing', 'Load Balancing', 'Delivery & Performance', c, t, `${c} endpoints`, t ? `${t} endpoints` : '');
+    }
+    if (metricsData?.customHostnames?.enabled) {
+      const c = metricsData.customHostnames.current?.hostnames || 0, t = appCfg.customHostnames?.threshold;
+      add('customHostnames', 'Custom Hostnames', 'Delivery & Performance', c, t, `${c} hostnames`, t ? `${t} hostnames` : '');
+    }
+    if (metricsData?.logExplorer?.enabled) {
+      const c = metricsData.logExplorer.current?.billableGB || 0, t = appCfg.logExplorer?.threshold;
+      add('logExplorer', 'Log Explorer', 'Logs & Analytics', c, t, fmtGB(c), t ? fmtGB(t) : '');
+    }
+
+    const ztCfg = config?.zeroTrust || {};
+    if (metricsData?.zeroTrustSeats?.enabled) {
+      const c = metricsData.zeroTrustSeats.current?.seats || 0, t = ztCfg.seats?.threshold;
+      add('zeroTrustSeats', 'Zero Trust Seats', 'Cloudflare One', c, t, `${c} seats`, t ? `${t} seats` : '');
+    }
+
+    const netCfg = config?.networkServices || {};
+    if (metricsData?.magicTransit?.enabled) {
+      const c = metricsData.magicTransit.current?.ingressP95Mbps || 0, t = netCfg.magicTransit?.threshold;
+      add('magicTransit', 'Magic Transit — Ingress', 'Network Services', c, t, fmtBw(c), t ? fmtBw(t) : '');
+      if (netCfg.magicTransit?.egressEnabled) {
+        const ec = metricsData.magicTransit.current?.egressP95Mbps || 0, et = netCfg.magicTransit?.egressThreshold;
+        add('magicTransit-egress', 'Magic Transit — Egress', 'Network Services', ec, et, fmtBw(ec), et ? fmtBw(et) : '');
+      }
+    }
+    if (metricsData?.magicWan?.enabled) {
+      const c = metricsData.magicWan.current?.p95Mbps || 0, t = netCfg.magicWan?.threshold;
+      add('magicWan', 'Magic WAN', 'Cloudflare One', c, t, fmtBw(c), t ? fmtBw(t) : '');
+    }
+    if (metricsData?.spectrum?.enabled) {
+      const sp = metricsData.spectrum, cfg = netCfg.spectrum || {};
+      const spdt = cfg.dataTransferThreshold ? cfg.dataTransferThreshold * 1e12 : null;
+      add('spectrum-transfer', 'Spectrum — Data Transfer', 'Network Services', sp.current?.dataTransfer || 0, spdt, fmtBytes(sp.current?.dataTransfer || 0), spdt ? fmtBytes(spdt) : '');
+      add('spectrum-conns', 'Spectrum — Connections', 'Network Services', sp.current?.p99Concurrent || 0, cfg.connectionsThreshold, fmtNum(sp.current?.p99Concurrent || 0), cfg.connectionsThreshold ? fmtNum(cfg.connectionsThreshold) : '');
+    }
+
+    const devCfg = config?.developerServices || {};
+    if (metricsData?.workersPages?.enabled) {
+      const wp = metricsData.workersPages, cfg = devCfg.workersPages || {};
+      const wpt = cfg.requestsThreshold ? cfg.requestsThreshold * 1e6 : null;
+      const wpct = cfg.cpuTimeThreshold ? cfg.cpuTimeThreshold * 1e6 : null;
+      add('workersPages-req', 'Workers & Pages — Requests', 'Developer Platform', wp.current?.requests || 0, wpt, fmtNum(wp.current?.requests || 0), wpt ? fmtNum(wpt) : '');
+      add('workersPages-cpu', 'Workers & Pages — CPU Time', 'Developer Platform', wp.current?.cpuTimeMs || 0, wpct, fmtNum(wp.current?.cpuTimeMs || 0) + ' ms', wpct ? fmtNum(wpct) + ' ms' : '');
+    }
+    if (metricsData?.r2Storage?.enabled) {
+      const r2 = metricsData.r2Storage, cfg = devCfg.r2Storage || {};
+      const r2at = cfg.classAOpsThreshold ? cfg.classAOpsThreshold * 1e6 : null;
+      const r2bt = cfg.classBOpsThreshold ? cfg.classBOpsThreshold * 1e6 : null;
+      add('r2-storage', 'R2 — Storage', 'Developer Platform', r2.current?.storageGB || 0, cfg.storageThreshold, fmtGB(r2.current?.storageGB || 0), cfg.storageThreshold ? fmtGB(cfg.storageThreshold) : '');
+      add('r2-classA', 'R2 — Class A Ops', 'Developer Platform', r2.current?.classAOps || 0, r2at, fmtNum(r2.current?.classAOps || 0), r2at ? fmtNum(r2at) : '');
+      add('r2-classB', 'R2 — Class B Ops', 'Developer Platform', r2.current?.classBOps || 0, r2bt, fmtNum(r2.current?.classBOps || 0), r2bt ? fmtNum(r2bt) : '');
+    }
+    if (metricsData?.d1?.enabled) {
+      const d = metricsData.d1, cfg = devCfg.d1 || {};
+      const d1rr = cfg.rowsReadThreshold ? cfg.rowsReadThreshold * 1e6 : null;
+      const d1rw = cfg.rowsWrittenThreshold ? cfg.rowsWrittenThreshold * 1e6 : null;
+      const d1mb = d.current?.storageMB || 0;
+      const d1st = cfg.storageThreshold ? cfg.storageThreshold * 1000 : null;
+      add('d1-storage', 'D1 — Storage', 'Developer Platform', d1mb, d1st, fmtMB(d1mb), d1st ? fmtMB(d1st) : '');
+      add('d1-rowsRead', 'D1 — Rows Read', 'Developer Platform', d.current?.rowsRead || 0, d1rr, fmtNum(d.current?.rowsRead || 0), d1rr ? fmtNum(d1rr) : '');
+      add('d1-rowsWritten', 'D1 — Rows Written', 'Developer Platform', d.current?.rowsWritten || 0, d1rw, fmtNum(d.current?.rowsWritten || 0), d1rw ? fmtNum(d1rw) : '');
+    }
+    if (metricsData?.kv?.enabled) {
+      const k = metricsData.kv, cfg = devCfg.kv || {};
+      const kvr = cfg.readsThreshold ? cfg.readsThreshold * 1e6 : null;
+      const kvw = cfg.writesThreshold ? cfg.writesThreshold * 1e6 : null;
+      const kvd = cfg.deletesThreshold ? cfg.deletesThreshold * 1e6 : null;
+      const kvl = cfg.listsThreshold ? cfg.listsThreshold * 1e6 : null;
+      add('kv-reads', 'KV — Reads', 'Developer Platform', k.current?.reads || 0, kvr, fmtNum(k.current?.reads || 0), kvr ? fmtNum(kvr) : '');
+      add('kv-writes', 'KV — Writes', 'Developer Platform', k.current?.writes || 0, kvw, fmtNum(k.current?.writes || 0), kvw ? fmtNum(kvw) : '');
+      add('kv-deletes', 'KV — Deletes', 'Developer Platform', k.current?.deletes || 0, kvd, fmtNum(k.current?.deletes || 0), kvd ? fmtNum(kvd) : '');
+      add('kv-lists', 'KV — Lists', 'Developer Platform', k.current?.lists || 0, kvl, fmtNum(k.current?.lists || 0), kvl ? fmtNum(kvl) : '');
+      const kvst = cfg.storageThreshold ? cfg.storageThreshold * 1000 : null;
+      add('kv-storage', 'KV — Storage', 'Developer Platform', k.current?.storageMB || 0, kvst, fmtMB(k.current?.storageMB || 0), kvst ? fmtMB(kvst) : '');
+    }
+    if (metricsData?.stream?.enabled) {
+      const s = metricsData.stream, cfg = devCfg.stream || {};
+      const sst = cfg.minutesStoredThreshold ? cfg.minutesStoredThreshold * 1e3 : null;
+      const sdt = cfg.minutesDeliveredThreshold ? cfg.minutesDeliveredThreshold * 1e3 : null;
+      add('stream-stored', 'Stream — Minutes Stored', 'Developer Platform', s.current?.minutesStored || 0, sst, fmtMin(s.current?.minutesStored || 0), sst ? fmtMin(sst) : '');
+      add('stream-delivered', 'Stream — Minutes Delivered', 'Developer Platform', s.current?.minutesDelivered || 0, sdt, fmtMin(s.current?.minutesDelivered || 0), sdt ? fmtMin(sdt) : '');
+    }
+    if (metricsData?.images?.enabled) {
+      const im = metricsData.images, cfg = devCfg.images || {};
+      const ist = cfg.imagesStoredThreshold ? cfg.imagesStoredThreshold * 1e3 : null;
+      const idt = cfg.imagesDeliveredThreshold ? cfg.imagesDeliveredThreshold * 1e3 : null;
+      add('images-stored', 'Images — Stored', 'Developer Platform', im.current?.imagesStored || 0, ist, fmtNum(im.current?.imagesStored || 0), ist ? fmtNum(ist) : '');
+      add('images-delivered', 'Images — Delivered', 'Developer Platform', im.current?.imagesDelivered || 0, idt, fmtNum(im.current?.imagesDelivered || 0), idt ? fmtNum(idt) : '');
+    }
+    if (metricsData?.workersAI?.enabled) {
+      const c = metricsData.workersAI.current?.neurons || 0, t = devCfg.workersAI?.neuronsThreshold ? devCfg.workersAI.neuronsThreshold * 1e6 : null;
+      add('workersAI', 'Workers AI', 'Developer Platform', c, t, fmtNum(c) + ' neurons', t ? fmtNum(t) + ' neurons' : '');
+    }
+    if (metricsData?.queues?.enabled) {
+      const c = metricsData.queues.current?.operations || 0, t = devCfg.queues?.operationsThreshold ? devCfg.queues.operationsThreshold * 1e6 : null;
+      add('queues', 'Queues', 'Developer Platform', c, t, fmtNum(c) + ' ops', t ? fmtNum(t) + ' ops' : '');
+    }
+    if (metricsData?.workersLogsTraces?.enabled) {
+      const c = metricsData.workersLogsTraces.current?.events || 0, t = devCfg.workersLogsTraces?.eventsThreshold ? devCfg.workersLogsTraces.eventsThreshold * 1e6 : null;
+      add('workersLogsTraces', 'Workers Observability', 'Developer Platform', c, t, fmtNum(c) + ' events', t ? fmtNum(t) + ' events' : '');
+    }
+    if (metricsData?.durableObjects?.enabled) {
+      const d = metricsData.durableObjects, cfg = devCfg.durableObjects || {};
+      const dort = cfg.requestsThreshold ? cfg.requestsThreshold * 1e6 : null;
+      const fmtGBs = (v) => v >= 1e6 ? `${(v/1e6).toFixed(2)}M GB-s` : v >= 1e3 ? `${(v/1e3).toFixed(2)}K GB-s` : `${v.toFixed(2)} GB-s`;
+      add('do-requests', 'Durable Objects — Requests', 'Developer Platform', d.current?.requests || 0, dort, fmtNum(d.current?.requests || 0), dort ? fmtNum(dort) : '');
+      add('do-duration', 'Durable Objects — Duration', 'Developer Platform', d.current?.durationGBs || 0, cfg.durationThreshold, fmtGBs(d.current?.durationGBs || 0), cfg.durationThreshold ? fmtGBs(cfg.durationThreshold) : '');
+      const domb = d.current?.storageMB || 0;
+      const dost = cfg.storageThreshold ? cfg.storageThreshold * 1000 : null;
+      add('do-storage', 'Durable Objects — Storage', 'Developer Platform', domb, dost, fmtMB(domb), dost ? fmtMB(dost) : '');
+    }
+    return skus;
+  };
+
+  const sendSlackMessage = async (metricsData, zonesData, mode = 'alert') => {
     const accountIds = config?.accountIds || (config?.accountId ? [config.accountId] : []);
-    
+    const skuMetrics = buildSkuMetrics(metricsData, zonesData);
+
     try {
       const response = await fetch('/api/webhook/check', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          metrics: {
-            zones: zonesData?.enterprise || 0,
-            requests: metricsData?.current?.requests || 0,
-            bandwidth: metricsData?.current?.bytes || 0,
-            botManagement: metricsData?.botManagement?.current?.likelyHuman || 0,
-            apiShield: metricsData?.apiShield?.current?.requests || 0,
-            pageShield: metricsData?.pageShield?.current?.requests || 0,
-            advancedRateLimiting: metricsData?.advancedRateLimiting?.current?.requests || 0,
-          },
-          thresholds: {
-            zones: config.thresholdZones,
-            requests: config.thresholdRequests,
-            bandwidth: config.thresholdBandwidth,
-            botManagement: config?.applicationServices?.botManagement?.threshold || null,
-            apiShield: config?.applicationServices?.apiShield?.threshold || null,
-            pageShield: config?.applicationServices?.pageShield?.threshold || null,
-            advancedRateLimiting: config?.applicationServices?.advancedRateLimiting?.threshold || null,
-          },
+          skuMetrics,
           slackWebhook: config.slackWebhook,
-          accountIds: accountIds,
-          // Legacy support
-          accountId: accountIds[0],
-          forceTest,
+          accountIds,
+          mode,
+          alertFrequency: config.alertFrequency || 'monthly',
         }),
       });
 
       const result = await response.json();
       setLastChecked(new Date());
-      
-      // Only show notification when:
-      // 1. Manual test via "Test Now" button
-      // 2. Slack notification was actually sent (not skipped)
-      if (forceTest) {
-        alert(`✅ Test notification sent!\n\n${result.message || 'Slack webhook test completed.'}`);
-      } else if (result.slackSent) {
-        alert(`🚨 Alert sent!\n\nSlack notification sent for ${result.alerts?.length || 0} threshold breach(es).`);
+
+      if (mode === 'report') {
+        alert(result.success ? `✅ ${result.message}` : `❌ ${result.message}`);
       }
-      // Silent otherwise (no alerts triggered or already sent this month)
     } catch (error) {
-      console.error('Error checking thresholds:', error);
-      alert('❌ Failed to check thresholds. Please try again.');
+      console.error('Error sending Slack message:', error);
+      if (mode === 'report') {
+        alert('❌ Failed to send report. Please try again.');
+      }
     }
   };  
 
@@ -337,6 +480,28 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
             ...metrics.advancedRateLimiting,
             threshold: config?.applicationServices?.advancedRateLimiting?.threshold || metrics.advancedRateLimiting.threshold,
           } : null,
+          argo: metrics.argo ? {
+            ...metrics.argo,
+            threshold: config?.applicationServices?.argo?.threshold || metrics.argo.threshold,
+          } : null,
+          cacheReserve: metrics.cacheReserve ? {
+            ...metrics.cacheReserve,
+            storageThreshold: config?.applicationServices?.cacheReserve?.storageThreshold || metrics.cacheReserve.storageThreshold,
+            classAOpsThreshold: config?.applicationServices?.cacheReserve?.classAOpsThreshold || metrics.cacheReserve.classAOpsThreshold,
+            classBOpsThreshold: config?.applicationServices?.cacheReserve?.classBOpsThreshold || metrics.cacheReserve.classBOpsThreshold,
+          } : null,
+          loadBalancing: metrics.loadBalancing ? {
+            ...metrics.loadBalancing,
+            threshold: config?.applicationServices?.loadBalancing?.threshold || metrics.loadBalancing.threshold,
+          } : null,
+          customHostnames: metrics.customHostnames ? {
+            ...metrics.customHostnames,
+            threshold: config?.applicationServices?.customHostnames?.threshold || metrics.customHostnames.threshold,
+          } : null,
+          logExplorer: metrics.logExplorer ? {
+            ...metrics.logExplorer,
+            threshold: config?.applicationServices?.logExplorer?.threshold || metrics.logExplorer.threshold,
+          } : null,
           zeroTrustSeats: metrics.zeroTrustSeats ? {
             ...metrics.zeroTrustSeats,
             threshold: config?.zeroTrust?.seats?.threshold || metrics.zeroTrustSeats.threshold,
@@ -352,6 +517,55 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
             classBOpsThreshold: config?.developerServices?.r2Storage?.classBOpsThreshold || metrics.r2Storage.classBOpsThreshold,
             storageThreshold: config?.developerServices?.r2Storage?.storageThreshold || metrics.r2Storage.storageThreshold,
           } : null,
+          d1: metrics.d1 ? {
+            ...metrics.d1,
+            rowsReadThreshold: config?.developerServices?.d1?.rowsReadThreshold || metrics.d1.rowsReadThreshold,
+            rowsWrittenThreshold: config?.developerServices?.d1?.rowsWrittenThreshold || metrics.d1.rowsWrittenThreshold,
+            storageThreshold: config?.developerServices?.d1?.storageThreshold || metrics.d1.storageThreshold,
+          } : null,
+          kv: metrics.kv ? {
+            ...metrics.kv,
+            readsThreshold: config?.developerServices?.kv?.readsThreshold || metrics.kv.readsThreshold,
+            writesThreshold: config?.developerServices?.kv?.writesThreshold || metrics.kv.writesThreshold,
+            deletesThreshold: config?.developerServices?.kv?.deletesThreshold || metrics.kv.deletesThreshold,
+            listsThreshold: config?.developerServices?.kv?.listsThreshold || metrics.kv.listsThreshold,
+            storageThreshold: config?.developerServices?.kv?.storageThreshold || metrics.kv.storageThreshold,
+          } : null,
+          stream: metrics.stream ? {
+            ...metrics.stream,
+            minutesStoredThreshold: config?.developerServices?.stream?.minutesStoredThreshold || metrics.stream.minutesStoredThreshold,
+            minutesDeliveredThreshold: config?.developerServices?.stream?.minutesDeliveredThreshold || metrics.stream.minutesDeliveredThreshold,
+          } : null,
+          images: metrics.images ? {
+            ...metrics.images,
+            imagesStoredThreshold: config?.developerServices?.images?.imagesStoredThreshold || metrics.images.imagesStoredThreshold,
+            imagesDeliveredThreshold: config?.developerServices?.images?.imagesDeliveredThreshold || metrics.images.imagesDeliveredThreshold,
+          } : null,
+          workersAI: metrics.workersAI ? {
+            ...metrics.workersAI,
+            neuronsThreshold: config?.developerServices?.workersAI?.neuronsThreshold || metrics.workersAI.neuronsThreshold,
+          } : null,
+          queues: metrics.queues ? {
+            ...metrics.queues,
+            operationsThreshold: config?.developerServices?.queues?.operationsThreshold || metrics.queues.operationsThreshold,
+          } : null,
+          workersLogsTraces: metrics.workersLogsTraces ? {
+            ...metrics.workersLogsTraces,
+            eventsThreshold: config?.developerServices?.workersLogsTraces?.eventsThreshold || metrics.workersLogsTraces.eventsThreshold,
+          } : null,
+          durableObjects: metrics.durableObjects ? {
+            ...metrics.durableObjects,
+            sqliteEnabled: config?.developerServices?.durableObjects?.sqliteEnabled || false,
+            kvStorageEnabled: config?.developerServices?.durableObjects?.kvStorageEnabled || false,
+            requestsThreshold: config?.developerServices?.durableObjects?.requestsThreshold || metrics.durableObjects.requestsThreshold,
+            durationThreshold: config?.developerServices?.durableObjects?.durationThreshold || metrics.durableObjects.durationThreshold,
+            sqliteRowsReadThreshold: config?.developerServices?.durableObjects?.sqliteRowsReadThreshold || metrics.durableObjects.sqliteRowsReadThreshold,
+            sqliteRowsWrittenThreshold: config?.developerServices?.durableObjects?.sqliteRowsWrittenThreshold || metrics.durableObjects.sqliteRowsWrittenThreshold,
+            kvReadUnitsThreshold: config?.developerServices?.durableObjects?.kvReadUnitsThreshold || metrics.durableObjects.kvReadUnitsThreshold,
+            kvWriteUnitsThreshold: config?.developerServices?.durableObjects?.kvWriteUnitsThreshold || metrics.durableObjects.kvWriteUnitsThreshold,
+            kvDeletesThreshold: config?.developerServices?.durableObjects?.kvDeletesThreshold || metrics.durableObjects.kvDeletesThreshold,
+            storageThreshold: config?.developerServices?.durableObjects?.storageThreshold || metrics.durableObjects.storageThreshold,
+          } : null,
           magicTransit: metrics.magicTransit ? {
             ...metrics.magicTransit,
             egressEnabled: config?.networkServices?.magicTransit?.egressEnabled || false,
@@ -361,6 +575,11 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
           magicWan: metrics.magicWan ? {
             ...metrics.magicWan,
             threshold: config?.networkServices?.magicWan?.threshold || metrics.magicWan.threshold,
+          } : null,
+          spectrum: metrics.spectrum ? {
+            ...metrics.spectrum,
+            dataTransferThreshold: config?.networkServices?.spectrum?.dataTransferThreshold || metrics.spectrum.dataTransferThreshold,
+            connectionsThreshold: config?.networkServices?.spectrum?.connectionsThreshold || metrics.spectrum.connectionsThreshold,
           } : null,
         }, 
         zones 
@@ -452,7 +671,118 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
           timeSeries: accountRateLimitingData.timeSeries,
         };
       }
-      // If no data for this account, set to null (product not contracted)
+    }
+
+    // Filter Argo data for selected account
+    let filteredArgo = null;
+    if (metrics.argo && metrics.argo.enabled) {
+      const accountArgoData = metrics.argo.perAccountData?.find(
+        acc => acc.accountId === selectedAccount
+      );
+
+      if (accountArgoData) {
+        filteredArgo = {
+          enabled: true,
+          threshold: config?.applicationServices?.argo?.threshold || metrics.argo.threshold,
+          current: accountArgoData.current,
+          previous: accountArgoData.previous,
+          timeSeries: accountArgoData.timeSeries,
+        };
+      }
+    }
+
+    let filteredCacheReserve = null;
+    if (metrics.cacheReserve && metrics.cacheReserve.enabled) {
+      const accountZoneIds = new Set((accountZones || []).map(z => z.id));
+      const accountCRZones = metrics.cacheReserve.perZoneData?.filter(
+        z => accountZoneIds.has(z.zoneId)
+      ) || [];
+      if (accountCRZones.length > 0) {
+        const timeSeriesMap = new Map();
+        accountCRZones.forEach(z => {
+          (z.timeSeries || []).forEach(ts => {
+            const existing = timeSeriesMap.get(ts.month);
+            if (existing) {
+              existing.storageGBDays += ts.storageGBDays || 0;
+              existing.classAOps += ts.classAOps || 0;
+              existing.classBOps += ts.classBOps || 0;
+            } else {
+              timeSeriesMap.set(ts.month, { ...ts, storageGBDays: ts.storageGBDays || 0, classAOps: ts.classAOps || 0, classBOps: ts.classBOps || 0 });
+            }
+          });
+        });
+        filteredCacheReserve = {
+          enabled: true,
+          storageThreshold: config?.applicationServices?.cacheReserve?.storageThreshold || metrics.cacheReserve.storageThreshold,
+          classAOpsThreshold: config?.applicationServices?.cacheReserve?.classAOpsThreshold || metrics.cacheReserve.classAOpsThreshold,
+          classBOpsThreshold: config?.applicationServices?.cacheReserve?.classBOpsThreshold || metrics.cacheReserve.classBOpsThreshold,
+          current: {
+            storageGBDays: accountCRZones.reduce((s, z) => s + (z.current?.storageGBDays || 0), 0),
+            classAOps: accountCRZones.reduce((s, z) => s + (z.current?.classAOps || 0), 0),
+            classBOps: accountCRZones.reduce((s, z) => s + (z.current?.classBOps || 0), 0),
+            zones: accountCRZones.map(z => ({ zoneId: z.zoneId, zoneName: z.zoneName, storageGBDays: z.current?.storageGBDays || 0, classAOps: z.current?.classAOps || 0, classBOps: z.current?.classBOps || 0 })),
+          },
+          previous: {
+            storageGBDays: accountCRZones.reduce((s, z) => s + (z.previous?.storageGBDays || 0), 0),
+            classAOps: accountCRZones.reduce((s, z) => s + (z.previous?.classAOps || 0), 0),
+            classBOps: accountCRZones.reduce((s, z) => s + (z.previous?.classBOps || 0), 0),
+            zones: accountCRZones.map(z => ({ zoneId: z.zoneId, zoneName: z.zoneName, storageGBDays: z.previous?.storageGBDays || 0, classAOps: z.previous?.classAOps || 0, classBOps: z.previous?.classBOps || 0 })),
+          },
+          timeSeries: Array.from(timeSeriesMap.values()).sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp)),
+          perZoneData: accountCRZones,
+        };
+      }
+    }
+
+    // Filter Load Balancing data for selected account
+    let filteredLoadBalancing = null;
+    if (metrics.loadBalancing && metrics.loadBalancing.enabled) {
+      const accountLbData = metrics.loadBalancing.perAccountData?.find(
+        acc => acc.accountId === selectedAccount
+      );
+      if (accountLbData) {
+        filteredLoadBalancing = {
+          enabled: true,
+          threshold: config?.applicationServices?.loadBalancing?.threshold || metrics.loadBalancing.threshold,
+          current: accountLbData.current,
+          previous: accountLbData.previous,
+          timeSeries: accountLbData.timeSeries,
+        };
+      }
+    }
+    
+    // Filter Custom Hostnames data for selected account
+    let filteredCustomHostnames = null;
+    if (metrics.customHostnames && metrics.customHostnames.enabled) {
+      const accountChData = metrics.customHostnames.perAccountData?.find(
+        acc => acc.accountId === selectedAccount
+      );
+      if (accountChData) {
+        filteredCustomHostnames = {
+          enabled: true,
+          threshold: config?.applicationServices?.customHostnames?.threshold || metrics.customHostnames.threshold,
+          current: accountChData.current,
+          previous: accountChData.previous,
+          timeSeries: accountChData.timeSeries,
+        };
+      }
+    }
+    
+    // Filter Log Explorer data for selected account
+    let filteredLogExplorer = null;
+    if (metrics.logExplorer && metrics.logExplorer.enabled) {
+      const accountLeData = metrics.logExplorer.perAccountData?.find(
+        acc => acc.accountId === selectedAccount
+      );
+      if (accountLeData) {
+        filteredLogExplorer = {
+          enabled: true,
+          threshold: config?.applicationServices?.logExplorer?.threshold || metrics.logExplorer.threshold,
+          current: accountLeData.current,
+          previous: accountLeData.previous,
+          timeSeries: accountLeData.timeSeries,
+        };
+      }
     }
     
     // Filter Zero Trust Seats data for selected account
@@ -511,7 +841,168 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
         };
       }
     }
+
+    // Filter D1 data for selected account
+    let filteredD1 = null;
+    if (metrics.d1 && metrics.d1.enabled) {
+      const accountD1Data = metrics.d1.perAccountData?.find(
+        acc => acc.accountId === selectedAccount
+      );
+
+      if (accountD1Data) {
+        filteredD1 = {
+          enabled: true,
+          rowsReadThreshold: config?.developerServices?.d1?.rowsReadThreshold || metrics.d1.rowsReadThreshold,
+          rowsWrittenThreshold: config?.developerServices?.d1?.rowsWrittenThreshold || metrics.d1.rowsWrittenThreshold,
+          storageThreshold: config?.developerServices?.d1?.storageThreshold || metrics.d1.storageThreshold,
+          current: accountD1Data.current,
+          previous: accountD1Data.previous,
+          timeSeries: accountD1Data.timeSeries,
+        };
+      }
+    }
+
+    // Filter Durable Objects data for selected account
+    let filteredDO = null;
+    if (metrics.durableObjects && metrics.durableObjects.enabled) {
+      const accountDOData = metrics.durableObjects.perAccountData?.find(
+        acc => acc.accountId === selectedAccount
+      );
+
+      if (accountDOData) {
+        filteredDO = {
+          enabled: true,
+          sqliteEnabled: config?.developerServices?.durableObjects?.sqliteEnabled ?? true,
+          kvStorageEnabled: config?.developerServices?.durableObjects?.kvStorageEnabled ?? true,
+          requestsThreshold: config?.developerServices?.durableObjects?.requestsThreshold || metrics.durableObjects.requestsThreshold,
+          durationThreshold: config?.developerServices?.durableObjects?.durationThreshold || metrics.durableObjects.durationThreshold,
+          sqliteRowsReadThreshold: config?.developerServices?.durableObjects?.sqliteRowsReadThreshold || metrics.durableObjects.sqliteRowsReadThreshold,
+          sqliteRowsWrittenThreshold: config?.developerServices?.durableObjects?.sqliteRowsWrittenThreshold || metrics.durableObjects.sqliteRowsWrittenThreshold,
+          kvReadUnitsThreshold: config?.developerServices?.durableObjects?.kvReadUnitsThreshold || metrics.durableObjects.kvReadUnitsThreshold,
+          kvWriteUnitsThreshold: config?.developerServices?.durableObjects?.kvWriteUnitsThreshold || metrics.durableObjects.kvWriteUnitsThreshold,
+          kvDeletesThreshold: config?.developerServices?.durableObjects?.kvDeletesThreshold || metrics.durableObjects.kvDeletesThreshold,
+          storageThreshold: config?.developerServices?.durableObjects?.storageThreshold || metrics.durableObjects.storageThreshold,
+          current: accountDOData.current,
+          previous: accountDOData.previous,
+          timeSeries: accountDOData.timeSeries,
+        };
+      }
+    }
+
+    // Filter KV data for selected account
+    let filteredKV = null;
+    if (metrics.kv && metrics.kv.enabled) {
+      const accountKVData = metrics.kv.perAccountData?.find(
+        acc => acc.accountId === selectedAccount
+      );
+
+      if (accountKVData) {
+        filteredKV = {
+          enabled: true,
+          readsThreshold: config?.developerServices?.kv?.readsThreshold || metrics.kv.readsThreshold,
+          writesThreshold: config?.developerServices?.kv?.writesThreshold || metrics.kv.writesThreshold,
+          deletesThreshold: config?.developerServices?.kv?.deletesThreshold || metrics.kv.deletesThreshold,
+          listsThreshold: config?.developerServices?.kv?.listsThreshold || metrics.kv.listsThreshold,
+          storageThreshold: config?.developerServices?.kv?.storageThreshold || metrics.kv.storageThreshold,
+          current: accountKVData.current,
+          previous: accountKVData.previous,
+          timeSeries: accountKVData.timeSeries,
+        };
+      }
+    }
     
+    // Filter Workers Logs & Traces data for selected account
+    let filteredWorkersLogsTraces = null;
+    if (metrics.workersLogsTraces && metrics.workersLogsTraces.enabled) {
+      const accountWLTData = metrics.workersLogsTraces.perAccountData?.find(
+        acc => acc.accountId === selectedAccount
+      );
+
+      if (accountWLTData) {
+        filteredWorkersLogsTraces = {
+          enabled: true,
+          eventsThreshold: config?.developerServices?.workersLogsTraces?.eventsThreshold || metrics.workersLogsTraces.eventsThreshold,
+          current: accountWLTData.current,
+          previous: accountWLTData.previous,
+          timeSeries: accountWLTData.timeSeries,
+        };
+      }
+    }
+
+    // Filter Queues data for selected account
+    let filteredQueues = null;
+    if (metrics.queues && metrics.queues.enabled) {
+      const accountQueuesData = metrics.queues.perAccountData?.find(
+        acc => acc.accountId === selectedAccount
+      );
+
+      if (accountQueuesData) {
+        filteredQueues = {
+          enabled: true,
+          operationsThreshold: config?.developerServices?.queues?.operationsThreshold || metrics.queues.operationsThreshold,
+          current: accountQueuesData.current,
+          previous: accountQueuesData.previous,
+          timeSeries: accountQueuesData.timeSeries,
+        };
+      }
+    }
+
+    // Filter Workers AI data for selected account
+    let filteredWorkersAI = null;
+    if (metrics.workersAI && metrics.workersAI.enabled) {
+      const accountWAIData = metrics.workersAI.perAccountData?.find(
+        acc => acc.accountId === selectedAccount
+      );
+
+      if (accountWAIData) {
+        filteredWorkersAI = {
+          enabled: true,
+          neuronsThreshold: config?.developerServices?.workersAI?.neuronsThreshold || metrics.workersAI.neuronsThreshold,
+          current: accountWAIData.current,
+          previous: accountWAIData.previous,
+          timeSeries: accountWAIData.timeSeries,
+        };
+      }
+    }
+
+    // Filter Images data for selected account
+    let filteredImages = null;
+    if (metrics.images && metrics.images.enabled) {
+      const accountImagesData = metrics.images.perAccountData?.find(
+        acc => acc.accountId === selectedAccount
+      );
+
+      if (accountImagesData) {
+        filteredImages = {
+          enabled: true,
+          imagesStoredThreshold: config?.developerServices?.images?.imagesStoredThreshold || metrics.images.imagesStoredThreshold,
+          imagesDeliveredThreshold: config?.developerServices?.images?.imagesDeliveredThreshold || metrics.images.imagesDeliveredThreshold,
+          current: accountImagesData.current,
+          previous: accountImagesData.previous,
+          timeSeries: accountImagesData.timeSeries,
+        };
+      }
+    }
+
+    // Filter Stream data for selected account
+    let filteredStream = null;
+    if (metrics.stream && metrics.stream.enabled) {
+      const accountStreamData = metrics.stream.perAccountData?.find(
+        acc => acc.accountId === selectedAccount
+      );
+
+      if (accountStreamData) {
+        filteredStream = {
+          enabled: true,
+          minutesStoredThreshold: config?.developerServices?.stream?.minutesStoredThreshold || metrics.stream.minutesStoredThreshold,
+          minutesDeliveredThreshold: config?.developerServices?.stream?.minutesDeliveredThreshold || metrics.stream.minutesDeliveredThreshold,
+          current: accountStreamData.current,
+          previous: accountStreamData.previous,
+          timeSeries: accountStreamData.timeSeries,
+        };
+      }
+    }
+
     // Filter Magic Transit data for selected account
     let filteredMagicTransit = null;
     if (metrics.magicTransit && metrics.magicTransit.enabled) {
@@ -532,6 +1023,44 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
       }
     }
     
+    // Filter Spectrum data for selected account (zone-based)
+    let filteredSpectrum = null;
+    if (metrics.spectrum && metrics.spectrum.enabled) {
+      const accountZoneIds = new Set((accountZones || []).map(z => z.id));
+      const accountSpecZones = metrics.spectrum.perZoneData?.filter(
+        z => accountZoneIds.has(z.zoneId)
+      ) || [];
+      if (accountSpecZones.length > 0) {
+        const timeSeriesMap = new Map();
+        accountSpecZones.forEach(z => {
+          (z.timeSeries || []).forEach(ts => {
+            const existing = timeSeriesMap.get(ts.month);
+            if (existing) {
+              existing.dataTransfer += ts.dataTransfer || 0;
+              existing.p99Concurrent = Math.max(existing.p99Concurrent, ts.p99Concurrent || 0);
+            } else {
+              timeSeriesMap.set(ts.month, { ...ts, dataTransfer: ts.dataTransfer || 0, p99Concurrent: ts.p99Concurrent || 0 });
+            }
+          });
+        });
+        filteredSpectrum = {
+          enabled: true,
+          dataTransferThreshold: config?.networkServices?.spectrum?.dataTransferThreshold || metrics.spectrum.dataTransferThreshold,
+          connectionsThreshold: config?.networkServices?.spectrum?.connectionsThreshold || metrics.spectrum.connectionsThreshold,
+          current: {
+            dataTransfer: accountSpecZones.reduce((s, z) => s + (z.current?.dataTransfer || 0), 0),
+            p99Concurrent: Math.max(...accountSpecZones.map(z => z.current?.p99Concurrent || 0)),
+          },
+          previous: {
+            dataTransfer: accountSpecZones.reduce((s, z) => s + (z.previous?.dataTransfer || 0), 0),
+            p99Concurrent: Math.max(...accountSpecZones.map(z => z.previous?.p99Concurrent || 0)),
+          },
+          timeSeries: Array.from(timeSeriesMap.values()).sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp)),
+          perZoneData: accountSpecZones,
+        };
+      }
+    }
+
     // Filter Magic WAN data for selected account
     let filteredMagicWan = null;
     if (metrics.magicWan && metrics.magicWan.enabled) {
@@ -557,11 +1086,25 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
         apiShield: filteredApiShield,
         pageShield: filteredPageShield,
         advancedRateLimiting: filteredAdvancedRateLimiting,
+        argo: filteredArgo,
+        cacheReserve: filteredCacheReserve,
+        loadBalancing: filteredLoadBalancing,
+        customHostnames: filteredCustomHostnames,
+        logExplorer: filteredLogExplorer,
         zeroTrustSeats: filteredZeroTrustSeats,
         workersPages: filteredWorkersPages,
         r2Storage: filteredR2Storage,
+        d1: filteredD1,
+        kv: filteredKV,
+        stream: filteredStream,
+        images: filteredImages,
+        workersAI: filteredWorkersAI,
+        queues: filteredQueues,
+        workersLogsTraces: filteredWorkersLogsTraces,
+        durableObjects: filteredDO,
         magicTransit: filteredMagicTransit,
         magicWan: filteredMagicWan,
+        spectrum: filteredSpectrum,
       },
       zones: accountZones ? { ...zones, zones: accountZones, enterprise: accountZones.length } : zones
     };
@@ -655,86 +1198,9 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
   const showAccountFilter = accountIds.length > 1;
 
   return (
-    <div className="space-y-6 relative">
-      
+    <div className="space-y-4 relative">
 
-      {/* Account Filter & Alert Toggle */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {/* Account Filter */}
-        {showAccountFilter && (
-          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
-            <div className="flex items-center space-x-3">
-              <Filter className="w-5 h-5 text-slate-600" />
-              <div className="flex-1">
-                <h3 className="font-semibold text-gray-900 mb-2">Account Filter</h3>
-                <select
-                  value={selectedAccount}
-                  onChange={(e) => setSelectedAccount(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                >
-                  <option value="all">All Accounts (Aggregated)</option>
-                  {accountsWithNames.map((account) => (
-                    <option key={account.id} value={account.id}>
-                      {account.name}
-                    </option>
-                  ))}
-                </select>
-                <p className="text-xs text-gray-500 mt-1">
-                  {selectedAccount === 'all' ? 'Showing combined data from all accounts' : 'Showing data for selected account only'}
-                </p>
-              </div>
-            </div>
-          </div>
-        )}
-        
-        {/* Alert Toggle */}
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-          <div className="flex items-start justify-between gap-4">
-            <div className="flex items-start gap-4 flex-1">
-              {alertsEnabled ? (
-                <Bell className="w-5 h-5 text-blue-600 mt-0.5 flex-shrink-0" />
-              ) : (
-                <BellOff className="w-5 h-5 text-gray-400 mt-0.5 flex-shrink-0" />
-              )}
-              <div className="flex-1 min-w-0">
-                <h3 className="font-semibold text-gray-900 mb-1">Threshold Alerts</h3>
-                <p className="text-sm text-gray-600 leading-relaxed">
-                  Get notified when usage reaches 90% of contracted limits
-                </p>
-              </div>
-            </div>
-            <div className="flex items-center gap-3 flex-shrink-0">
-              {alertsEnabled && metrics && zones && (
-                <button
-                  onClick={() => checkThresholds(metrics, zones, true)}
-                  className="px-4 py-2 text-sm font-medium bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 transition-colors whitespace-nowrap"
-                >
-                  Send Now
-                </button>
-              )}
-              <button
-                onClick={toggleAlerts}
-                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                  alertsEnabled ? 'bg-blue-600' : 'bg-gray-300'
-                }`}
-              >
-              <span
-                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                  alertsEnabled ? 'translate-x-6' : 'translate-x-1'
-                }`}
-              />
-            </button>
-          </div>
-          </div>
-          {lastChecked && (
-            <p className="text-xs text-gray-500 mt-4 ml-9">
-              Last checked: {lastChecked.toLocaleTimeString()}
-            </p>
-          )}
-        </div>
-      </div>
-
-      {/* Action Bar */}
+      {/* Compact Toolbar */}
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-2xl font-bold text-gray-900">Usage Overview</h2>
@@ -744,26 +1210,94 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
             </p>
             {cacheAge !== null && (
               <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                Data last refreshed: {
-                  cacheAge < 60 
-                    ? `${cacheAge}s ago` 
-                    : cacheAge < 3600 
-                      ? `${Math.floor(cacheAge / 60)}m ago`
-                      : `${Math.floor(cacheAge / 3600)}h ago`
+                {cacheAge < 60 
+                  ? `${cacheAge}s ago` 
+                  : cacheAge < 3600 
+                    ? `${Math.floor(cacheAge / 60)}m ago`
+                    : `${Math.floor(cacheAge / 3600)}h ago`
                 }
               </span>
             )}
           </div>
         </div>
-        <button
-          onClick={prewarmCache}
-          disabled={loading || prewarming}
-          className="flex items-center space-x-2 px-5 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-sm font-medium"
-          title="Fetch fresh data and cache for instant future loads"
-        >
-          <RefreshCw className={`w-4 h-4 ${prewarming ? 'animate-spin' : ''}`} />
-          <span>{prewarming ? 'Refreshing...' : 'Refresh Data'}</span>
-        </button>
+        <div className="flex items-center gap-3">
+          {showAccountFilter && (
+            <select
+              value={selectedAccount}
+              onChange={(e) => setSelectedAccount(e.target.value)}
+              className="px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
+            >
+              <option value="all">All Accounts</option>
+              {accountsWithNames.map((account) => (
+                <option key={account.id} value={account.id}>
+                  {account.name}
+                </option>
+              ))}
+            </select>
+          )}
+          <div className="relative">
+            <button
+              onClick={() => setShowAlertPopover(!showAlertPopover)}
+              className={`p-2 rounded-lg border transition-colors ${
+                alertsEnabled 
+                  ? 'border-blue-200 bg-blue-50 text-blue-600 hover:bg-blue-100' 
+                  : 'border-gray-300 bg-white text-gray-400 hover:bg-gray-50'
+              }`}
+              title="Threshold Alerts"
+            >
+              {alertsEnabled ? <Bell className="w-4 h-4" /> : <BellOff className="w-4 h-4" />}
+            </button>
+            {showAlertPopover && (
+              <>
+                <div className="fixed inset-0 z-10" onClick={() => setShowAlertPopover(false)} />
+                <div className="absolute right-0 top-full mt-2 w-72 bg-white rounded-lg shadow-lg border border-gray-200 p-4 z-20">
+                  <div className="flex items-center justify-between mb-3">
+                    <h4 className="text-sm font-semibold text-gray-900">Threshold Alerts</h4>
+                    <button
+                      onClick={toggleAlerts}
+                      className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+                        alertsEnabled ? 'bg-blue-600' : 'bg-gray-300'
+                      }`}
+                    >
+                      <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+                        alertsEnabled ? 'translate-x-[18px]' : 'translate-x-[3px]'
+                      }`} />
+                    </button>
+                  </div>
+                  <p className="text-xs text-gray-500 mb-3">Notify when usage reaches 90% of contracted limits ({config.alertFrequency === 'weekly' ? 'weekly' : 'monthly'})</p>
+                  {alertsEnabled && metrics && zones && (
+                    <div className="space-y-2">
+                      <button
+                        onClick={() => { sendSlackMessage(metrics, zones, 'alert'); setShowAlertPopover(false); }}
+                        className="w-full px-3 py-1.5 text-xs font-medium bg-amber-100 text-amber-700 rounded-md hover:bg-amber-200 transition-colors"
+                      >
+                        Check Alerts Now
+                      </button>
+                      <button
+                        onClick={() => { sendSlackMessage(metrics, zones, 'report'); setShowAlertPopover(false); }}
+                        className="w-full px-3 py-1.5 text-xs font-medium bg-blue-100 text-blue-700 rounded-md hover:bg-blue-200 transition-colors"
+                      >
+                        Send Full Report
+                      </button>
+                    </div>
+                  )}
+                  {lastChecked && (
+                    <p className="text-[10px] text-gray-400 mt-2">Last checked: {lastChecked.toLocaleTimeString()}</p>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+          <button
+            onClick={prewarmCache}
+            disabled={loading || prewarming}
+            className="flex items-center space-x-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-sm text-sm font-medium"
+            title="Fetch fresh data and cache for instant future loads"
+          >
+            <RefreshCw className={`w-4 h-4 ${prewarming ? 'animate-spin' : ''}`} />
+            <span>{prewarming ? 'Refreshing...' : 'Refresh'}</span>
+          </button>
+        </div>
       </div>
 
       {/* Service Tabs */}
@@ -798,6 +1332,7 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
         {/* Service Content */}
         <div className="bg-gray-50">
           {activeServiceTab === SERVICE_CATEGORIES.APPLICATION_SERVICES && renderApplicationServices()}
+          {activeServiceTab === SERVICE_CATEGORIES.NETWORK_SERVICES && renderNetworkServices()}
           {activeServiceTab === SERVICE_CATEGORIES.CLOUDFLARE_ONE && renderCloudflareOne()}
           {activeServiceTab === SERVICE_CATEGORIES.DEVELOPER_PLATFORM && renderDeveloperPlatform()}
         </div>
@@ -806,13 +1341,21 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
   );
 
   function renderSidebarLayout(sidebarItems, renderContent) {
-    const activeProduct = selectedProduct || (sidebarItems.length > 0 ? sidebarItems[0].id : null);
+    const firstClickable = sidebarItems.find(item => item.type !== 'header');
+    const activeProduct = selectedProduct || (firstClickable ? firstClickable.id : null);
 
     return (
       <div className="flex min-h-[500px]">
         <div className="w-64 border-r border-gray-200 bg-white flex-shrink-0 pt-6">
           <nav className="py-2">
-            {sidebarItems.map((item) => {
+            {sidebarItems.map((item, index) => {
+              if (item.type === 'header') {
+                return (
+                  <div key={item.label} className={`px-4 pt-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-gray-400`}>
+                    {item.label}
+                  </div>
+                );
+              }
               const isActive = activeProduct === item.id;
               return (
                 <button
@@ -841,26 +1384,32 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
   function renderApplicationServices() {
     const sidebarItems = [];
 
-    if (config?.applicationServices?.core?.enabled !== false && metrics?.current) {
-      sidebarItems.push({ id: 'enterpriseZones', label: 'Enterprise Zones' });
-      sidebarItems.push({ id: 'appServices', label: 'Enterprise Core' });
-      sidebarItems.push({ id: 'dns', label: 'DNS' });
-    }
-    if (displayMetrics?.magicTransit?.enabled) {
-      sidebarItems.push({ id: 'magicTransit', label: 'Magic Transit' });
-    }
-    if (displayMetrics?.botManagement?.enabled) {
-      sidebarItems.push({ id: 'botManagement', label: 'Bot Management' });
-    }
-    if (displayMetrics?.apiShield?.enabled) {
-      sidebarItems.push({ id: 'apiShield', label: 'API Shield' });
-    }
-    if (displayMetrics?.pageShield?.enabled) {
-      sidebarItems.push({ id: 'pageShield', label: 'Page Shield' });
-    }
-    if (displayMetrics?.advancedRateLimiting?.enabled) {
-      sidebarItems.push({ id: 'advancedRateLimiting', label: 'Advanced Rate Limiting' });
-    }
+    const coreEnabled = config?.applicationServices?.core?.enabled !== false;
+    const trafficEnabled = config?.applicationServices?.core?.trafficEnabled !== undefined ? config.applicationServices.core.trafficEnabled : coreEnabled;
+    const dnsEnabled = config?.applicationServices?.core?.dnsEnabled !== undefined ? config.applicationServices.core.dnsEnabled : coreEnabled;
+    const coreItems = [];
+    if (coreEnabled && metrics?.current) coreItems.push({ id: 'enterpriseZones', label: 'Enterprise Zones' });
+    if (trafficEnabled && metrics?.current) coreItems.push({ id: 'appServices', label: 'Traffic' });
+    if (dnsEnabled && metrics?.current) coreItems.push({ id: 'dns', label: 'DNS' });
+    if (coreItems.length > 0) sidebarItems.push({ type: 'header', label: 'Zones & Traffic' }, ...coreItems);
+
+    const securityItems = [];
+    if (displayMetrics?.botManagement?.enabled) securityItems.push({ id: 'botManagement', label: 'Bot Management' });
+    if (displayMetrics?.apiShield?.enabled) securityItems.push({ id: 'apiShield', label: 'API Shield' });
+    if (displayMetrics?.pageShield?.enabled) securityItems.push({ id: 'pageShield', label: 'Page Shield' });
+    if (displayMetrics?.advancedRateLimiting?.enabled) securityItems.push({ id: 'advancedRateLimiting', label: 'Advanced Rate Limiting' });
+    if (securityItems.length > 0) sidebarItems.push({ type: 'header', label: 'Application Security' }, ...securityItems);
+
+    const deliveryItems = [];
+    if (displayMetrics?.argo?.enabled) deliveryItems.push({ id: 'argo', label: 'Argo Smart Routing' });
+    if (displayMetrics?.cacheReserve?.enabled) deliveryItems.push({ id: 'cacheReserve', label: 'Cache Reserve' });
+    if (displayMetrics?.loadBalancing?.enabled) deliveryItems.push({ id: 'loadBalancing', label: 'Load Balancing' });
+    if (displayMetrics?.customHostnames?.enabled) deliveryItems.push({ id: 'customHostnames', label: 'Custom Hostnames' });
+    if (deliveryItems.length > 0) sidebarItems.push({ type: 'header', label: 'Delivery & Performance' }, ...deliveryItems);
+
+    const logsItems = [];
+    if (displayMetrics?.logExplorer?.enabled) logsItems.push({ id: 'logExplorer', label: 'Log Explorer' });
+    if (logsItems.length > 0) sidebarItems.push({ type: 'header', label: 'Logs & Analytics' }, ...logsItems);
 
     if (sidebarItems.length === 0) {
       return (
@@ -880,8 +1429,6 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
           return renderAppServicesCore();
         case 'dns':
           return renderDNS();
-        case 'magicTransit':
-          return renderMagicTransit();
         case 'botManagement':
           return renderAddonProduct('botManagement', 'Bot Management', 'Likely Human Requests', 'likelyHuman', 'traffic', '#f59e0b');
         case 'apiShield':
@@ -890,6 +1437,48 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
           return renderAddonProduct('pageShield', 'Page Shield', 'HTTP Requests', 'requests', 'requests', '#ec4899');
         case 'advancedRateLimiting':
           return renderAddonProduct('advancedRateLimiting', 'Advanced Rate Limiting', 'HTTP Requests', 'requests', 'requests', '#14b8a6');
+        case 'argo':
+          return renderArgo();
+        case 'cacheReserve':
+          return renderCacheReserve();
+        case 'loadBalancing':
+          return renderLoadBalancing();
+        case 'customHostnames':
+          return renderCustomHostnames();
+        case 'logExplorer':
+          return renderLogExplorer();
+        default:
+          return null;
+      }
+    });
+  }
+
+  function renderNetworkServices() {
+    const sidebarItems = [];
+
+    if (displayMetrics?.magicTransit?.enabled) {
+      sidebarItems.push({ id: 'magicTransit', label: 'Magic Transit' });
+    }
+    if (displayMetrics?.spectrum?.enabled) {
+      sidebarItems.push({ id: 'spectrum', label: 'Spectrum' });
+    }
+
+    if (sidebarItems.length === 0) {
+      return (
+        <div className="text-center py-20">
+          <AlertCircle className="w-16 h-16 mx-auto text-gray-400 mb-4" />
+          <h3 className="text-xl font-semibold text-gray-700 mb-2">Network Services</h3>
+          <p className="text-sm text-gray-500">No Network Services configured. Go to Settings to enable them.</p>
+        </div>
+      );
+    }
+
+    return renderSidebarLayout(sidebarItems, (activeProduct) => {
+      switch (activeProduct) {
+        case 'magicTransit':
+          return renderMagicTransit();
+        case 'spectrum':
+          return renderSpectrum();
         default:
           return null;
       }
@@ -1023,6 +1612,7 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
           confidence={displayMetrics?.current?.confidence?.dnsQueries}
           confidenceMetricType="DNS Queries"
         />
+        {renderZoneBreakdown('dns')}
       </div>
     );
   }
@@ -1090,6 +1680,405 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
             yAxisLabel="Mbps"
           />
         )}
+      </div>
+    );
+  }
+
+  function renderSpectrum() {
+    const spec = displayMetrics?.spectrum;
+    if (!spec?.enabled) return null;
+
+    const formatDataTransfer = (bytes) => {
+      if (bytes >= 1099511627776) return `${(bytes / 1099511627776).toFixed(2)} TB`;
+      if (bytes >= 1073741824) return `${(bytes / 1073741824).toFixed(2)} GB`;
+      if (bytes >= 1048576) return `${(bytes / 1048576).toFixed(2)} MB`;
+      if (bytes >= 1024) return `${(bytes / 1024).toFixed(2)} KB`;
+      return `${bytes} B`;
+    };
+
+    const formatConnections = (val) => {
+      if (val >= 1000000) return `${(val / 1000000).toFixed(2)}M`;
+      if (val >= 1000) return `${(val / 1000).toFixed(2)}K`;
+      return Math.round(val).toLocaleString();
+    };
+
+    const dataTransferThresholdBytes = spec.dataTransferThreshold ? spec.dataTransferThreshold * 1e12 : null;
+
+    return (
+      <div className="space-y-6">
+        <ConsolidatedCard
+          title="Data Transfer"
+          subtitle="Spectrum ingress + egress bytes"
+          value={spec.current?.dataTransfer || 0}
+          formatted={formatDataTransfer(spec.current?.dataTransfer || 0)}
+          threshold={dataTransferThresholdBytes}
+          percentage={calculatePercentage(spec.current?.dataTransfer || 0, dataTransferThresholdBytes)}
+          icon="bandwidth"
+          unit=""
+          color="#8b5cf6"
+          timeSeries={spec.timeSeries}
+          dataKey="dataTransfer"
+          chartFormatter={formatDataTransfer}
+          yAxisLabel="Transfer"
+        />
+        <div className="relative">
+          <ConsolidatedCard
+            title={
+              <span className="inline-flex items-center gap-1.5">
+                Concurrent Connections (P99)
+                <span className="group relative">
+                  <Info className="w-3.5 h-3.5 text-gray-400 cursor-help" />
+                  <span className="invisible group-hover:visible absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-72 p-2.5 bg-gray-900 text-white text-xs rounded-lg shadow-lg z-50 leading-relaxed">
+                    P99 is calculated from per-minute samples collected since Spectrum was enabled. For an accurate monthly P99, ensure Spectrum is configured from the 1st of the month.
+                  </span>
+                </span>
+              </span>
+            }
+            subtitle="P99 of per-minute concurrent client samples"
+            value={spec.current?.p99Concurrent || 0}
+            formatted={formatConnections(spec.current?.p99Concurrent || 0)}
+            threshold={spec.connectionsThreshold}
+            percentage={calculatePercentage(spec.current?.p99Concurrent || 0, spec.connectionsThreshold)}
+            icon="connections"
+            unit=""
+            color="#06b6d4"
+            timeSeries={spec.timeSeries}
+            dataKey="p99Concurrent"
+            chartFormatter={formatConnections}
+            yAxisLabel="P99 Concurrent"
+          />
+        </div>
+      </div>
+    );
+  }
+
+  function renderCacheReserve() {
+    const cr = displayMetrics?.cacheReserve;
+    if (!cr?.enabled) return null;
+
+    const formatStorageTB = (bytes) => {
+      if (bytes >= 1e12) return `${(bytes / 1e12).toFixed(2)} TB`;
+      if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(2)} GB`;
+      if (bytes >= 1e6) return `${(bytes / 1e6).toFixed(2)} MB`;
+      return `${(bytes / 1e3).toFixed(2)} KB`;
+    };
+
+    return (
+      <div className="space-y-6">
+        <ConsolidatedCard
+          title="Storage"
+          subtitle="Aggregate storage usage"
+          value={cr.current?.storageGBDays || 0}
+          formatted={(() => {
+            const gb = cr.current?.storageGBDays || 0;
+            if (gb >= 1000) return `${(gb / 1000).toFixed(2)} TB`;
+            if (gb >= 1) return `${gb.toFixed(2)} GB`;
+            return `${(gb * 1000).toFixed(2)} MB`;
+          })()}
+          threshold={cr.storageThreshold || null}
+          percentage={cr.storageThreshold ? (cr.current?.storageGBDays || 0) / (cr.storageThreshold * 1000) * 100 : null}
+          icon="cr-storage"
+          unit=""
+          color="#10b981"
+          timeSeries={cr.timeSeries}
+          dataKey="storageGBDays"
+          chartFormatter={(v) => v >= 1 ? `${v.toFixed(1)} GB` : `${(v * 1000).toFixed(0)} MB`}
+          yAxisLabel="Storage"
+          isZoneFiltered={true}
+        />
+        <ConsolidatedCard
+          title="Class A Operations"
+          subtitle="Write operations"
+          value={cr.current?.classAOps || 0}
+          formatted={formatNumber(cr.current?.classAOps || 0)}
+          threshold={cr.classAOpsThreshold || null}
+          percentage={calculatePercentage(cr.current?.classAOps || 0, cr.classAOpsThreshold || null)}
+          icon="upload"
+          unit=""
+          color="#3b82f6"
+          timeSeries={cr.timeSeries}
+          dataKey="classAOps"
+          chartFormatter={formatNumber}
+          yAxisLabel="Operations"
+          isZoneFiltered={true}
+        />
+        <ConsolidatedCard
+          title="Class B Operations"
+          subtitle="Read operations"
+          value={cr.current?.classBOps || 0}
+          formatted={formatNumber(cr.current?.classBOps || 0)}
+          threshold={cr.classBOpsThreshold || null}
+          percentage={calculatePercentage(cr.current?.classBOps || 0, cr.classBOpsThreshold || null)}
+          icon="download"
+          unit=""
+          color="#6366f1"
+          timeSeries={cr.timeSeries}
+          dataKey="classBOps"
+          chartFormatter={formatNumber}
+          yAxisLabel="Operations"
+          isZoneFiltered={true}
+        />
+        {renderCacheReserveZoneBreakdown()}
+      </div>
+    );
+  }
+
+  function renderLoadBalancing() {
+    const lb = displayMetrics?.loadBalancing;
+    if (!lb?.enabled) return null;
+
+    return (
+      <div className="space-y-6">
+        <ConsolidatedCard
+          title="Endpoints"
+          subtitle="Load balancer origins"
+          value={lb.current?.endpoints || 0}
+          formatted={(lb.current?.endpoints || 0).toLocaleString()}
+          threshold={lb.threshold || null}
+          percentage={calculatePercentage(lb.current?.endpoints || 0, lb.threshold || null)}
+          icon="endpoints"
+          unit=""
+          color="#f59e0b"
+          timeSeries={lb.timeSeries}
+          dataKey="endpoints"
+          chartFormatter={(v) => v.toLocaleString()}
+          yAxisLabel="Endpoints"
+        />
+      </div>
+    );
+  }
+
+  function renderLogExplorer() {
+    const le = displayMetrics?.logExplorer;
+    if (!le?.enabled) return null;
+
+    const formatGB = (gb) => {
+      if (gb >= 1000) return `${(gb / 1000).toFixed(2)} TB`;
+      if (gb >= 1) return `${gb.toFixed(2)} GB`;
+      if (gb >= 0.001) return `${(gb * 1000).toFixed(2)} MB`;
+      return '0 GB';
+    };
+
+    return (
+      <div className="space-y-6">
+        <ConsolidatedCard
+          title="Data Retention"
+          subtitle="Billable data ingested this month"
+          value={le.current?.billableGB || 0}
+          formatted={formatGB(le.current?.billableGB || 0)}
+          threshold={le.threshold || null}
+          percentage={calculatePercentage(le.current?.billableGB || 0, le.threshold || null)}
+          icon="database"
+          unit="GB"
+          color="#6366f1"
+          timeSeries={le.timeSeries}
+          dataKey="billableGB"
+          chartFormatter={formatGB}
+          yAxisLabel="GB"
+        />
+      </div>
+    );
+  }
+
+  function renderCustomHostnames() {
+    const ch = displayMetrics?.customHostnames;
+    if (!ch?.enabled) return null;
+
+    return (
+      <div className="space-y-6">
+        <ConsolidatedCard
+          title="Custom Hostnames"
+          subtitle="Active custom hostnames"
+          value={ch.current?.hostnames || 0}
+          formatted={(ch.current?.hostnames || 0).toLocaleString()}
+          threshold={ch.threshold || null}
+          percentage={calculatePercentage(ch.current?.hostnames || 0, ch.threshold || null)}
+          icon="hostnames"
+          unit=""
+          color="#6366f1"
+          timeSeries={ch.timeSeries}
+          dataKey="hostnames"
+          chartFormatter={(v) => v.toLocaleString()}
+          yAxisLabel="Hostnames"
+        />
+      </div>
+    );
+  }
+
+  function renderCacheReserveZoneBreakdown() {
+    const cr = displayMetrics?.cacheReserve;
+    const zoneData = zonesViewMode === 'current' ? cr?.current?.zones : cr?.previous?.zones;
+    if (!zoneData || zoneData.length === 0) return null;
+
+    return (
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
+        <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+          <div>
+            <h3 className="text-lg font-semibold text-gray-900">Cache Reserve - Breakdown by Zone</h3>
+            <p className="text-sm text-gray-500 mt-1">Storage and operations per zone</p>
+          </div>
+          <div className="flex items-center bg-gray-100 rounded-lg p-1">
+            <button
+              onClick={() => setZonesViewMode('current')}
+              className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                zonesViewMode === 'current'
+                  ? 'bg-blue-600 text-white shadow-sm'
+                  : 'text-gray-600 hover:bg-gray-200'
+              }`}
+            >
+              Current Month
+            </button>
+            <button
+              onClick={() => setZonesViewMode('previous')}
+              className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                zonesViewMode === 'previous'
+                  ? 'bg-blue-600 text-white shadow-sm'
+                  : 'text-gray-600 hover:bg-gray-200'
+              }`}
+            >
+              Previous Month
+            </button>
+          </div>
+        </div>
+        <div className="p-6">
+          <div className="bg-gray-50 border border-gray-200 rounded-lg overflow-hidden">
+            <div className="max-h-96 overflow-y-auto">
+              <table className="min-w-full divide-y divide-gray-200">
+                <thead className="bg-gray-100 sticky top-0 z-10">
+                  <tr>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Zone</th>
+                    <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Storage</th>
+                    <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Class A Ops</th>
+                    <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Class B Ops</th>
+                  </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-200">
+                  {zoneData.map((zone, index) => (
+                    <tr key={zone.zoneId || index} className="hover:bg-gray-50">
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div className="text-sm font-medium text-gray-900">{zone.zoneName || zone.zoneId || 'Unknown Zone'}</div>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-right">
+                        <span className="text-sm font-semibold text-gray-900">{(() => { const gb = zone.storageGBDays || 0; if (gb >= 1000) return `${(gb/1000).toFixed(2)} TB`; if (gb >= 1) return `${gb.toFixed(2)} GB`; return `${(gb*1000).toFixed(2)} MB`; })()}</span>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-right">
+                        <span className="text-sm font-semibold text-gray-900">{formatNumber(zone.classAOps || 0)}</span>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-right">
+                        <span className="text-sm font-semibold text-gray-900">{formatNumber(zone.classBOps || 0)}</span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  function renderArgo() {
+    const argo = displayMetrics?.argo;
+    if (!argo?.enabled) return null;
+
+    const currentBytes = argo.current?.bytes || 0;
+
+    return (
+      <div className="space-y-6">
+        <ConsolidatedCard
+          title="Argo Smart Routing"
+          subtitle="Data Transfer (ingress + egress)"
+          value={currentBytes}
+          formatted={formatBytes(currentBytes)}
+          threshold={argo.threshold}
+          percentage={calculatePercentage(currentBytes, argo.threshold)}
+          icon="bandwidth"
+          unit=""
+          color="#f97316"
+          timeSeries={argo.timeSeries}
+          dataKey="bytes"
+          chartFormatter={formatBytes}
+          yAxisLabel="Transfer"
+          confidence={argo.current?.confidence}
+          confidenceMetricType="Data Transfer"
+          isZoneFiltered={true}
+        />
+        {renderArgoZoneBreakdown()}
+      </div>
+    );
+  }
+
+  function renderArgoZoneBreakdown() {
+    const argo = displayMetrics?.argo;
+    const zoneData = zonesViewMode === 'current' ? argo?.current?.zones : argo?.previous?.zones;
+    if (!zoneData || zoneData.length === 0) return null;
+
+    const uniqueZones = zoneData.reduce((acc, zone) => {
+      const id = zone.zoneId;
+      if (!acc[id]) acc[id] = zone;
+      return acc;
+    }, {});
+    const deduplicatedZones = Object.values(uniqueZones);
+
+    return (
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
+        <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+          <div>
+            <h3 className="text-lg font-semibold text-gray-900">Argo - Breakdown by Zone</h3>
+            <p className="text-sm text-gray-500 mt-1">Data transfer per zone</p>
+          </div>
+          <div className="flex items-center bg-gray-100 rounded-lg p-1">
+            <button
+              onClick={() => setZonesViewMode('current')}
+              className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                zonesViewMode === 'current'
+                  ? 'bg-blue-600 text-white shadow-sm'
+                  : 'text-gray-600 hover:bg-gray-200'
+              }`}
+            >
+              Current Month
+            </button>
+            <button
+              onClick={() => setZonesViewMode('previous')}
+              className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                zonesViewMode === 'previous'
+                  ? 'bg-blue-600 text-white shadow-sm'
+                  : 'text-gray-600 hover:bg-gray-200'
+              }`}
+            >
+              Previous Month
+            </button>
+          </div>
+        </div>
+        <div className="p-6">
+          <div className="bg-gray-50 border border-gray-200 rounded-lg overflow-hidden">
+            <div className="max-h-96 overflow-y-auto">
+              <table className="min-w-full divide-y divide-gray-200">
+                <thead className="bg-gray-100 sticky top-0 z-10">
+                  <tr>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Zone</th>
+                    <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Data Transfer</th>
+                  </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-200">
+                  {deduplicatedZones.map((zone, index) => (
+                    <tr key={zone.zoneId || index} className="hover:bg-gray-50">
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div className="text-sm font-medium text-gray-900">{zone.zoneName || zone.zoneId || 'Unknown Zone'}</div>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-right">
+                        <span className="text-sm font-semibold text-gray-900">
+                          {formatBytes(zone.bytes || 0)}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
       </div>
     );
   }
@@ -1163,9 +2152,9 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
             <div className="mb-4 flex items-center space-x-1.5 text-xs text-gray-500">
               <div className="relative group">
                 <Info className="w-4 h-4 text-gray-400 cursor-help" />
-                <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-64 px-3 py-2 bg-gray-900 text-white text-xs rounded-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50 pointer-events-none">
+                <div className="absolute bottom-full left-0 mb-2 w-64 px-3 py-2 bg-gray-900 text-white text-xs rounded-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50 pointer-events-none">
                   Primary/secondary classifications are based on previous month's usage (zones with ≥50GB are Primary).
-                  <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-gray-900"></div>
+                  <div className="absolute top-full left-4 border-4 border-transparent border-t-gray-900"></div>
                 </div>
               </div>
               <span>Classifications based on previous month</span>
@@ -1178,6 +2167,7 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
               : displayMetrics?.previousMonthZoneBreakdown?.zones}
             usePreviousClassification={zonesViewMode === 'current'}
             previousMonthMetrics={displayMetrics?.previousMonthZoneBreakdown?.zones}
+            visibleColumns={type === 'dns' ? ['dns'] : ['type', 'bandwidth', 'requests', 'dns']}
           />
         </div>
       </div>
@@ -1262,7 +2252,7 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
     const sidebarItems = [];
 
     if (displayMetrics?.zeroTrustSeats?.enabled) {
-      sidebarItems.push({ id: 'zeroTrustSeats', label: 'Zero Trust Seats' });
+      sidebarItems.push({ id: 'zeroTrustSeats', label: 'Zero Trust' });
     }
     if (displayMetrics?.magicWan?.enabled) {
       sidebarItems.push({ id: 'wan', label: 'WAN' });
@@ -1273,7 +2263,7 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
         <div className="text-center py-20">
           <AlertCircle className="w-16 h-16 mx-auto text-gray-400 mb-4" />
           <h3 className="text-xl font-semibold text-gray-700 mb-2">Cloudflare One</h3>
-          <p className="text-sm text-gray-500">No Cloudflare One services configured. Go to Settings to enable Zero Trust Seats or WAN.</p>
+          <p className="text-sm text-gray-500">No Cloudflare One services configured. Go to Settings to enable Zero Trust or WAN.</p>
         </div>
       );
     }
@@ -1349,19 +2339,34 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
   function renderDeveloperPlatform() {
     const sidebarItems = [];
 
-    if (displayMetrics?.workersPages?.enabled) {
-      sidebarItems.push({ id: 'workersPages', label: 'Workers & Pages' });
-    }
-    if (displayMetrics?.r2Storage?.enabled) {
-      sidebarItems.push({ id: 'r2Storage', label: 'R2 Storage' });
-    }
+    const computeItems = [];
+    if (displayMetrics?.workersPages?.enabled) computeItems.push({ id: 'workersPages', label: 'Workers & Pages' });
+    if (displayMetrics?.queues?.enabled) computeItems.push({ id: 'queues', label: 'Queues' });
+    if (displayMetrics?.durableObjects?.enabled) computeItems.push({ id: 'durableObjects', label: 'Durable Objects' });
+    if (displayMetrics?.workersLogsTraces?.enabled) computeItems.push({ id: 'workersLogsTraces', label: 'Workers Observability' });
+    if (computeItems.length > 0) sidebarItems.push({ type: 'header', label: 'Compute' }, ...computeItems);
+
+    const aiItems = [];
+    if (displayMetrics?.workersAI?.enabled) aiItems.push({ id: 'workersAI', label: 'Workers AI' });
+    if (aiItems.length > 0) sidebarItems.push({ type: 'header', label: 'AI' }, ...aiItems);
+
+    const storageItems = [];
+    if (displayMetrics?.r2Storage?.enabled) storageItems.push({ id: 'r2Storage', label: 'R2 Storage' });
+    if (displayMetrics?.d1?.enabled) storageItems.push({ id: 'd1', label: 'D1 Database' });
+    if (displayMetrics?.kv?.enabled) storageItems.push({ id: 'kv', label: 'Workers KV' });
+    if (storageItems.length > 0) sidebarItems.push({ type: 'header', label: 'Storage & Databases' }, ...storageItems);
+
+    const mediaItems = [];
+    if (displayMetrics?.stream?.enabled) mediaItems.push({ id: 'stream', label: 'Stream' });
+    if (displayMetrics?.images?.enabled) mediaItems.push({ id: 'images', label: 'Images' });
+    if (mediaItems.length > 0) sidebarItems.push({ type: 'header', label: 'Media' }, ...mediaItems);
 
     if (sidebarItems.length === 0) {
       return (
         <div className="text-center py-20">
           <AlertCircle className="w-16 h-16 mx-auto text-gray-400 mb-4" />
           <h3 className="text-xl font-semibold text-gray-700 mb-2">Developer Platform</h3>
-          <p className="text-sm text-gray-500">No Developer Platform services configured. Go to Settings to enable Workers & Pages or R2 Storage.</p>
+          <p className="text-sm text-gray-500">No Developer Platform services configured. Go to Settings to enable them.</p>
         </div>
       );
     }
@@ -1372,6 +2377,22 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
           return renderWorkersPages();
         case 'r2Storage':
           return renderR2Storage();
+        case 'd1':
+          return renderD1();
+        case 'kv':
+          return renderKV();
+        case 'stream':
+          return renderStream();
+        case 'images':
+          return renderImages();
+        case 'workersAI':
+          return renderWorkersAI();
+        case 'queues':
+          return renderQueues();
+        case 'workersLogsTraces':
+          return renderWorkersLogsTraces();
+        case 'durableObjects':
+          return renderDurableObjects();
         default:
           return null;
       }
@@ -1381,13 +2402,6 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
   function renderWorkersPages() {
     const wp = displayMetrics?.workersPages;
     if (!wp?.enabled) return null;
-
-    const formatReqs = (val) => {
-      if (val >= 1000000000) return `${(val / 1000000000).toFixed(2)}B`;
-      if (val >= 1000000) return `${(val / 1000000).toFixed(2)}M`;
-      if (val >= 1000) return `${(val / 1000).toFixed(1)}K`;
-      return val.toLocaleString();
-    };
 
     const formatCpuTime = (ms) => {
       if (ms >= 1000000000) return `${(ms / 1000000000).toFixed(2)}B ms`;
@@ -1402,7 +2416,7 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
           title="Workers & Pages Requests"
           subtitle="Total invocations"
           value={wp.current?.requests || 0}
-          formatted={formatReqs(wp.current?.requests || 0)}
+          formatted={formatNumber(wp.current?.requests || 0)}
           threshold={wp.requestsThreshold ? wp.requestsThreshold * 1000000 : null}
           percentage={calculatePercentage(wp.current?.requests || 0, wp.requestsThreshold ? wp.requestsThreshold * 1000000 : null)}
           icon="activity"
@@ -1410,8 +2424,10 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
           color="#3b82f6"
           timeSeries={wp.timeSeries}
           dataKey="requests"
-          chartFormatter={formatReqs}
+          chartFormatter={formatNumber}
           yAxisLabel="Requests"
+          confidence={wp.current?.confidence}
+          confidenceMetricType="Worker Invocations"
         />
         <ConsolidatedCard
           title="CPU Time"
@@ -1436,14 +2452,7 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
     const r2 = displayMetrics?.r2Storage;
     if (!r2?.enabled) return null;
 
-    const formatReqs = (val) => {
-      if (val >= 1000000000) return `${(val / 1000000000).toFixed(2)}B`;
-      if (val >= 1000000) return `${(val / 1000000).toFixed(2)}M`;
-      if (val >= 1000) return `${(val / 1000).toFixed(1)}K`;
-      return val.toLocaleString();
-    };
-
-    const formatStorage = (gb) => {
+    const formatStorageGB = (gb) => {
       if (gb >= 1000) return `${(gb / 1000).toFixed(2)} TB`;
       if (gb >= 1) return `${gb.toFixed(2)} GB`;
       if (gb >= 0.001) return `${(gb * 1000).toFixed(2)} MB`;
@@ -1456,7 +2465,7 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
           title="Class A Operations"
           subtitle="Write/List/Delete"
           value={r2.current?.classAOps || 0}
-          formatted={formatReqs(r2.current?.classAOps || 0)}
+          formatted={formatNumber(r2.current?.classAOps || 0)}
           threshold={r2.classAOpsThreshold ? r2.classAOpsThreshold * 1000000 : null}
           percentage={calculatePercentage(r2.current?.classAOps || 0, r2.classAOpsThreshold ? r2.classAOpsThreshold * 1000000 : null)}
           icon="upload"
@@ -1464,14 +2473,14 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
           color="#3b82f6"
           timeSeries={r2.timeSeries}
           dataKey="classAOps"
-          chartFormatter={formatReqs}
+          chartFormatter={formatNumber}
           yAxisLabel="Operations"
         />
         <ConsolidatedCard
           title="Class B Operations"
           subtitle="Read"
           value={r2.current?.classBOps || 0}
-          formatted={formatReqs(r2.current?.classBOps || 0)}
+          formatted={formatNumber(r2.current?.classBOps || 0)}
           threshold={r2.classBOpsThreshold ? r2.classBOpsThreshold * 1000000 : null}
           percentage={calculatePercentage(r2.current?.classBOps || 0, r2.classBOpsThreshold ? r2.classBOpsThreshold * 1000000 : null)}
           icon="download"
@@ -1479,14 +2488,14 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
           color="#6366f1"
           timeSeries={r2.timeSeries}
           dataKey="classBOps"
-          chartFormatter={formatReqs}
+          chartFormatter={formatNumber}
           yAxisLabel="Operations"
         />
         <ConsolidatedCard
           title="Total Storage"
           subtitle="Capacity used"
           value={r2.current?.storageGB || 0}
-          formatted={formatStorage(r2.current?.storageGB || 0)}
+          formatted={formatStorageGB(r2.current?.storageGB || 0)}
           threshold={r2.storageThreshold || null}
           percentage={calculatePercentage(r2.current?.storageGB || 0, r2.storageThreshold || null)}
           icon="database"
@@ -1494,9 +2503,486 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
           color="#10b981"
           timeSeries={r2.timeSeries}
           dataKey="storageGB"
-          chartFormatter={formatStorage}
+          chartFormatter={formatStorageGB}
           yAxisLabel="Storage (GB)"
         />
+      </div>
+    );
+  }
+
+  function renderD1() {
+    const d1 = displayMetrics?.d1;
+    if (!d1?.enabled) return null;
+
+    return (
+      <div className="space-y-6">
+        <ConsolidatedCard
+          title="Rows Read"
+          subtitle="Database queries"
+          value={d1.current?.rowsRead || 0}
+          formatted={formatNumber(d1.current?.rowsRead || 0)}
+          threshold={d1.rowsReadThreshold ? d1.rowsReadThreshold * 1000000 : null}
+          percentage={calculatePercentage(d1.current?.rowsRead || 0, d1.rowsReadThreshold ? d1.rowsReadThreshold * 1000000 : null)}
+          icon="table"
+          unit=""
+          color="#3b82f6"
+          timeSeries={d1.timeSeries}
+          dataKey="rowsRead"
+          chartFormatter={formatNumber}
+          yAxisLabel="Rows"
+        />
+        <ConsolidatedCard
+          title="Rows Written"
+          subtitle="Database mutations"
+          value={d1.current?.rowsWritten || 0}
+          formatted={formatNumber(d1.current?.rowsWritten || 0)}
+          threshold={d1.rowsWrittenThreshold ? d1.rowsWrittenThreshold * 1000000 : null}
+          percentage={calculatePercentage(d1.current?.rowsWritten || 0, d1.rowsWrittenThreshold ? d1.rowsWrittenThreshold * 1000000 : null)}
+          icon="table"
+          unit=""
+          color="#6366f1"
+          timeSeries={d1.timeSeries}
+          dataKey="rowsWritten"
+          chartFormatter={formatNumber}
+          yAxisLabel="Rows"
+        />
+        <ConsolidatedCard
+          title="Total Storage"
+          subtitle="Database size"
+          value={d1.current?.storageMB || 0}
+          formatted={formatStorageMB(d1.current?.storageMB || 0)}
+          threshold={d1.storageThreshold ? d1.storageThreshold * 1000 : null}
+          percentage={calculatePercentage(d1.current?.storageMB || 0, d1.storageThreshold ? d1.storageThreshold * 1000 : null)}
+          icon="storage-mb"
+          unit=""
+          color="#10b981"
+          timeSeries={d1.timeSeries}
+          dataKey="storageMB"
+          chartFormatter={formatStorageMB}
+          yAxisLabel="Storage (MB)"
+        />
+      </div>
+    );
+  }
+
+  function renderKV() {
+    const kv = displayMetrics?.kv;
+    if (!kv?.enabled) return null;
+
+    return (
+      <div className="space-y-6">
+        <ConsolidatedCard
+          title="Keys Read"
+          subtitle="Read operations"
+          value={kv.current?.reads || 0}
+          formatted={formatNumber(kv.current?.reads || 0)}
+          threshold={kv.readsThreshold ? kv.readsThreshold * 1000000 : null}
+          percentage={calculatePercentage(kv.current?.reads || 0, kv.readsThreshold ? kv.readsThreshold * 1000000 : null)}
+          icon="table"
+          unit=""
+          color="#3b82f6"
+          timeSeries={kv.timeSeries}
+          dataKey="reads"
+          chartFormatter={formatNumber}
+          yAxisLabel="Operations"
+        />
+        <ConsolidatedCard
+          title="Keys Written"
+          subtitle="Write operations"
+          value={kv.current?.writes || 0}
+          formatted={formatNumber(kv.current?.writes || 0)}
+          threshold={kv.writesThreshold ? kv.writesThreshold * 1000000 : null}
+          percentage={calculatePercentage(kv.current?.writes || 0, kv.writesThreshold ? kv.writesThreshold * 1000000 : null)}
+          icon="table"
+          unit=""
+          color="#6366f1"
+          timeSeries={kv.timeSeries}
+          dataKey="writes"
+          chartFormatter={formatNumber}
+          yAxisLabel="Operations"
+        />
+        <ConsolidatedCard
+          title="Keys Deleted"
+          subtitle="Delete operations"
+          value={kv.current?.deletes || 0}
+          formatted={formatNumber(kv.current?.deletes || 0)}
+          threshold={kv.deletesThreshold ? kv.deletesThreshold * 1000000 : null}
+          percentage={calculatePercentage(kv.current?.deletes || 0, kv.deletesThreshold ? kv.deletesThreshold * 1000000 : null)}
+          icon="table"
+          unit=""
+          color="#f59e0b"
+          timeSeries={kv.timeSeries}
+          dataKey="deletes"
+          chartFormatter={formatNumber}
+          yAxisLabel="Operations"
+        />
+        <ConsolidatedCard
+          title="List Requests"
+          subtitle="List operations"
+          value={kv.current?.lists || 0}
+          formatted={formatNumber(kv.current?.lists || 0)}
+          threshold={kv.listsThreshold ? kv.listsThreshold * 1000000 : null}
+          percentage={calculatePercentage(kv.current?.lists || 0, kv.listsThreshold ? kv.listsThreshold * 1000000 : null)}
+          icon="table"
+          unit=""
+          color="#8b5cf6"
+          timeSeries={kv.timeSeries}
+          dataKey="lists"
+          chartFormatter={formatNumber}
+          yAxisLabel="Operations"
+        />
+        <ConsolidatedCard
+          title="Stored Data"
+          subtitle="Total storage"
+          value={kv.current?.storageMB || 0}
+          formatted={formatStorageMB(kv.current?.storageMB || 0)}
+          threshold={kv.storageThreshold ? kv.storageThreshold * 1000 : null}
+          percentage={calculatePercentage(kv.current?.storageMB || 0, kv.storageThreshold ? kv.storageThreshold * 1000 : null)}
+          icon="storage-mb"
+          unit=""
+          color="#10b981"
+          timeSeries={kv.timeSeries}
+          dataKey="storageMB"
+          chartFormatter={formatStorageMB}
+          yAxisLabel="Storage (MB)"
+        />
+      </div>
+    );
+  }
+
+  function renderStream() {
+    const streamData = displayMetrics?.stream;
+    if (!streamData?.enabled) return null;
+
+    const formatMinutes = (val) => {
+      if (val >= 1000000) return `${(val / 1000000).toFixed(2)}M min`;
+      if (val >= 1000) return `${(val / 1000).toFixed(2)}K min`;
+      return `${Math.round(val).toLocaleString()} min`;
+    };
+
+    return (
+      <div className="space-y-6">
+        <ConsolidatedCard
+          title="Minutes Stored"
+          subtitle="Total video duration stored"
+          value={streamData.current?.minutesStored || 0}
+          formatted={formatMinutes(streamData.current?.minutesStored || 0)}
+          threshold={streamData.minutesStoredThreshold ? streamData.minutesStoredThreshold * 1000 : null}
+          percentage={calculatePercentage(streamData.current?.minutesStored || 0, streamData.minutesStoredThreshold ? streamData.minutesStoredThreshold * 1000 : null)}
+          icon="minutes"
+          unit=""
+          color="#f59e0b"
+          timeSeries={streamData.timeSeries}
+          dataKey="minutesStored"
+          chartFormatter={formatMinutes}
+          yAxisLabel="Minutes"
+        />
+        <ConsolidatedCard
+          title="Minutes Delivered"
+          subtitle="Video delivered to viewers"
+          value={streamData.current?.minutesDelivered || 0}
+          formatted={formatMinutes(streamData.current?.minutesDelivered || 0)}
+          threshold={streamData.minutesDeliveredThreshold ? streamData.minutesDeliveredThreshold * 1000 : null}
+          percentage={calculatePercentage(streamData.current?.minutesDelivered || 0, streamData.minutesDeliveredThreshold ? streamData.minutesDeliveredThreshold * 1000 : null)}
+          icon="minutes"
+          unit=""
+          color="#3b82f6"
+          timeSeries={streamData.timeSeries}
+          dataKey="minutesDelivered"
+          chartFormatter={formatMinutes}
+          yAxisLabel="Minutes"
+        />
+      </div>
+    );
+  }
+
+  function renderImages() {
+    const imgData = displayMetrics?.images;
+    if (!imgData?.enabled) return null;
+
+    const formatCount = (val) => {
+      if (val >= 1000000) return `${(val / 1000000).toFixed(2)}M`;
+      if (val >= 1000) return `${(val / 1000).toFixed(2)}K`;
+      return Math.round(val).toLocaleString();
+    };
+
+    return (
+      <div className="space-y-6">
+        <ConsolidatedCard
+          title="Images Stored"
+          subtitle="Total images in storage"
+          value={imgData.current?.imagesStored || 0}
+          formatted={formatCount(imgData.current?.imagesStored || 0)}
+          threshold={imgData.imagesStoredThreshold ? imgData.imagesStoredThreshold * 1000 : null}
+          percentage={calculatePercentage(imgData.current?.imagesStored || 0, imgData.imagesStoredThreshold ? imgData.imagesStoredThreshold * 1000 : null)}
+          icon="images"
+          unit=""
+          color="#f59e0b"
+          timeSeries={imgData.timeSeries}
+          dataKey="imagesStored"
+          chartFormatter={formatCount}
+          yAxisLabel="Images"
+        />
+        <ConsolidatedCard
+          title="Images Delivered"
+          subtitle="Images served to viewers"
+          value={imgData.current?.imagesDelivered || 0}
+          formatted={formatCount(imgData.current?.imagesDelivered || 0)}
+          threshold={imgData.imagesDeliveredThreshold ? imgData.imagesDeliveredThreshold * 1000 : null}
+          percentage={calculatePercentage(imgData.current?.imagesDelivered || 0, imgData.imagesDeliveredThreshold ? imgData.imagesDeliveredThreshold * 1000 : null)}
+          icon="images"
+          unit=""
+          color="#3b82f6"
+          timeSeries={imgData.timeSeries}
+          dataKey="imagesDelivered"
+          chartFormatter={formatCount}
+          yAxisLabel="Requests"
+        />
+      </div>
+    );
+  }
+
+  function renderWorkersAI() {
+    const waiData = displayMetrics?.workersAI;
+    if (!waiData?.enabled) return null;
+
+    const formatNeurons = (val) => {
+      if (val >= 1000000) return `${(val / 1000000).toFixed(2)}M`;
+      if (val >= 1000) return `${(val / 1000).toFixed(2)}K`;
+      return val.toFixed(2);
+    };
+
+    return (
+      <div className="space-y-6">
+        <ConsolidatedCard
+          title="Neurons"
+          subtitle="AI inference usage"
+          value={waiData.current?.neurons || 0}
+          formatted={formatNeurons(waiData.current?.neurons || 0)}
+          threshold={waiData.neuronsThreshold ? waiData.neuronsThreshold * 1000000 : null}
+          percentage={calculatePercentage(waiData.current?.neurons || 0, waiData.neuronsThreshold ? waiData.neuronsThreshold * 1000000 : null)}
+          icon="neurons"
+          unit=""
+          color="#8b5cf6"
+          timeSeries={waiData.timeSeries}
+          dataKey="neurons"
+          chartFormatter={formatNeurons}
+          yAxisLabel="Neurons"
+        />
+      </div>
+    );
+  }
+
+  function renderWorkersLogsTraces() {
+    const wltData = displayMetrics?.workersLogsTraces;
+    if (!wltData?.enabled) return null;
+
+    const formatEvents = (val) => {
+      if (val >= 1000000) return `${(val / 1000000).toFixed(2)}M`;
+      if (val >= 1000) return `${(val / 1000).toFixed(2)}K`;
+      return Math.round(val).toLocaleString();
+    };
+
+    return (
+      <div className="space-y-6">
+        <ConsolidatedCard
+          title="Events"
+          subtitle="Workers Logs & Traces observability events"
+          value={wltData.current?.events || 0}
+          formatted={formatEvents(wltData.current?.events || 0)}
+          threshold={wltData.eventsThreshold ? wltData.eventsThreshold * 1000000 : null}
+          percentage={calculatePercentage(wltData.current?.events || 0, wltData.eventsThreshold ? wltData.eventsThreshold * 1000000 : null)}
+          icon="events"
+          unit=""
+          color="#f97316"
+          timeSeries={wltData.timeSeries}
+          dataKey="events"
+          chartFormatter={formatEvents}
+          yAxisLabel="Events"
+        />
+      </div>
+    );
+  }
+
+  function renderQueues() {
+    const qData = displayMetrics?.queues;
+    if (!qData?.enabled) return null;
+
+    const formatOps = (val) => {
+      if (val >= 1000000) return `${(val / 1000000).toFixed(2)}M`;
+      if (val >= 1000) return `${(val / 1000).toFixed(2)}K`;
+      return Math.round(val).toLocaleString();
+    };
+
+    return (
+      <div className="space-y-6">
+        <ConsolidatedCard
+          title="Operations"
+          subtitle="Billable message operations"
+          value={qData.current?.operations || 0}
+          formatted={formatOps(qData.current?.operations || 0)}
+          threshold={qData.operationsThreshold ? qData.operationsThreshold * 1000000 : null}
+          percentage={calculatePercentage(qData.current?.operations || 0, qData.operationsThreshold ? qData.operationsThreshold * 1000000 : null)}
+          icon="operations"
+          unit=""
+          color="#10b981"
+          timeSeries={qData.timeSeries}
+          dataKey="operations"
+          chartFormatter={formatOps}
+          yAxisLabel="Operations"
+        />
+      </div>
+    );
+  }
+
+  function renderDurableObjects() {
+    const doData = displayMetrics?.durableObjects;
+    if (!doData?.enabled) return null;
+
+    const formatGBs = (val) => {
+      if (val >= 1000000) return `${(val / 1000000).toFixed(2)}M GB-s`;
+      if (val >= 1000) return `${(val / 1000).toFixed(2)}K GB-s`;
+      return `${val.toFixed(2)} GB-s`;
+    };
+
+    return (
+      <div className="space-y-6">
+        <h4 className="text-sm font-semibold text-gray-500 uppercase tracking-wider">Compute</h4>
+        <ConsolidatedCard
+          title="Requests"
+          subtitle="Invocations"
+          value={doData.current?.requests || 0}
+          formatted={formatNumber(doData.current?.requests || 0)}
+          threshold={doData.requestsThreshold ? doData.requestsThreshold * 1000000 : null}
+          percentage={calculatePercentage(doData.current?.requests || 0, doData.requestsThreshold ? doData.requestsThreshold * 1000000 : null)}
+          icon="table"
+          unit=""
+          color="#3b82f6"
+          timeSeries={doData.timeSeries}
+          dataKey="requests"
+          chartFormatter={formatNumber}
+          yAxisLabel="Requests"
+        />
+        <ConsolidatedCard
+          title="Duration"
+          subtitle="Wall-clock time (GB-s)"
+          value={doData.current?.durationGBs || 0}
+          formatted={formatGBs(doData.current?.durationGBs || 0)}
+          threshold={doData.durationThreshold ? Number(doData.durationThreshold) : null}
+          percentage={calculatePercentage(doData.current?.durationGBs || 0, doData.durationThreshold ? Number(doData.durationThreshold) : null)}
+          icon="table"
+          unit=""
+          color="#6366f1"
+          timeSeries={doData.timeSeries}
+          dataKey="durationGBs"
+          chartFormatter={formatGBs}
+          yAxisLabel="GB-s"
+        />
+        {doData.sqliteEnabled && (
+          <>
+            <h4 className="text-sm font-semibold text-gray-500 uppercase tracking-wider pt-2">SQLite Storage Backend</h4>
+            <ConsolidatedCard
+              title="Rows Read"
+              subtitle="SQLite read operations"
+              value={doData.current?.sqliteRowsRead || 0}
+              formatted={formatNumber(doData.current?.sqliteRowsRead || 0)}
+              threshold={doData.sqliteRowsReadThreshold ? doData.sqliteRowsReadThreshold * 1000000 : null}
+              percentage={calculatePercentage(doData.current?.sqliteRowsRead || 0, doData.sqliteRowsReadThreshold ? doData.sqliteRowsReadThreshold * 1000000 : null)}
+              icon="table"
+              unit=""
+              color="#3b82f6"
+              timeSeries={doData.timeSeries}
+              dataKey="sqliteRowsRead"
+              chartFormatter={formatNumber}
+              yAxisLabel="Rows"
+            />
+            <ConsolidatedCard
+              title="Rows Written"
+              subtitle="SQLite write operations"
+              value={doData.current?.sqliteRowsWritten || 0}
+              formatted={formatNumber(doData.current?.sqliteRowsWritten || 0)}
+              threshold={doData.sqliteRowsWrittenThreshold ? doData.sqliteRowsWrittenThreshold * 1000000 : null}
+              percentage={calculatePercentage(doData.current?.sqliteRowsWritten || 0, doData.sqliteRowsWrittenThreshold ? doData.sqliteRowsWrittenThreshold * 1000000 : null)}
+              icon="table"
+              unit=""
+              color="#6366f1"
+              timeSeries={doData.timeSeries}
+              dataKey="sqliteRowsWritten"
+              chartFormatter={formatNumber}
+              yAxisLabel="Rows"
+            />
+          </>
+        )}
+        {doData.kvStorageEnabled && (
+          <>
+            <h4 className="text-sm font-semibold text-gray-500 uppercase tracking-wider pt-2">KV Storage Backend</h4>
+            <ConsolidatedCard
+              title="Read Request Units"
+              subtitle="KV read units"
+              value={doData.current?.kvReadUnits || 0}
+              formatted={formatNumber(doData.current?.kvReadUnits || 0)}
+              threshold={doData.kvReadUnitsThreshold ? doData.kvReadUnitsThreshold * 1000000 : null}
+              percentage={calculatePercentage(doData.current?.kvReadUnits || 0, doData.kvReadUnitsThreshold ? doData.kvReadUnitsThreshold * 1000000 : null)}
+              icon="table"
+              unit=""
+              color="#3b82f6"
+              timeSeries={doData.timeSeries}
+              dataKey="kvReadUnits"
+              chartFormatter={formatNumber}
+              yAxisLabel="Units"
+            />
+            <ConsolidatedCard
+              title="Write Request Units"
+              subtitle="KV write units"
+              value={doData.current?.kvWriteUnits || 0}
+              formatted={formatNumber(doData.current?.kvWriteUnits || 0)}
+              threshold={doData.kvWriteUnitsThreshold ? doData.kvWriteUnitsThreshold * 1000000 : null}
+              percentage={calculatePercentage(doData.current?.kvWriteUnits || 0, doData.kvWriteUnitsThreshold ? doData.kvWriteUnitsThreshold * 1000000 : null)}
+              icon="table"
+              unit=""
+              color="#6366f1"
+              timeSeries={doData.timeSeries}
+              dataKey="kvWriteUnits"
+              chartFormatter={formatNumber}
+              yAxisLabel="Units"
+            />
+            <ConsolidatedCard
+              title="Delete Requests"
+              subtitle="KV delete operations"
+              value={doData.current?.kvDeletes || 0}
+              formatted={formatNumber(doData.current?.kvDeletes || 0)}
+              threshold={doData.kvDeletesThreshold ? doData.kvDeletesThreshold * 1000000 : null}
+              percentage={calculatePercentage(doData.current?.kvDeletes || 0, doData.kvDeletesThreshold ? doData.kvDeletesThreshold * 1000000 : null)}
+              icon="table"
+              unit=""
+              color="#f59e0b"
+              timeSeries={doData.timeSeries}
+              dataKey="kvDeletes"
+              chartFormatter={formatNumber}
+              yAxisLabel="Requests"
+            />
+          </>
+        )}
+        {(doData.sqliteEnabled || doData.kvStorageEnabled) && (
+          <>
+            <h4 className="text-sm font-semibold text-gray-500 uppercase tracking-wider pt-2">Storage</h4>
+            <ConsolidatedCard
+              title="Stored Data"
+              subtitle="All backends"
+              value={doData.current?.storageMB || 0}
+              formatted={formatStorageMB(doData.current?.storageMB || 0)}
+              threshold={doData.storageThreshold ? doData.storageThreshold * 1000 : null}
+              percentage={calculatePercentage(doData.current?.storageMB || 0, doData.storageThreshold ? doData.storageThreshold * 1000 : null)}
+              icon="storage-mb"
+              unit=""
+              color="#10b981"
+              timeSeries={doData.timeSeries}
+              dataKey="storageMB"
+              chartFormatter={formatStorageMB}
+              yAxisLabel="Storage (MB)"
+            />
+          </>
+        )}
       </div>
     );
   }

@@ -6,6 +6,7 @@
 export const SERVICE_CATEGORIES = {
   APPLICATION_SERVICES: 'application_services',
   CLOUDFLARE_ONE: 'cloudflare_one',
+  NETWORK_SERVICES: 'network_services',
   DEVELOPER_PLATFORM: 'developer_platform',
 };
 
@@ -21,6 +22,12 @@ export const SERVICE_METADATA = {
     name: 'Cloudflare One',
     description: 'Zero Trust access, gateway, and WAN connectivity',
     icon: '🔐',
+  },
+  [SERVICE_CATEGORIES.NETWORK_SERVICES]: {
+    id: SERVICE_CATEGORIES.NETWORK_SERVICES,
+    name: 'Network Services',
+    description: 'Magic Transit, DDoS protection, and network connectivity',
+    icon: '🌐',
   },
   [SERVICE_CATEGORIES.DEVELOPER_PLATFORM]: {
     id: SERVICE_CATEGORIES.DEVELOPER_PLATFORM,
@@ -156,6 +163,8 @@ export function getSKUsForService(serviceId) {
       return APPLICATION_SERVICES_SKUS;
     case SERVICE_CATEGORIES.CLOUDFLARE_ONE:
       return CLOUDFLARE_ONE_SKUS;
+    case SERVICE_CATEGORIES.NETWORK_SERVICES:
+      return {};
     case SERVICE_CATEGORIES.DEVELOPER_PLATFORM:
       return DEVELOPER_PLATFORM_SKUS;
     default:

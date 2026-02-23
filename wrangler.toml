@@ -18,4 +18,5 @@ CLOUDFLARE_API_ENDPOINT = "https://api.cloudflare.com/client/v4/graphql"
 
 # Cron triggers for automatic threshold checks
 [triggers]
-crons = ["0 */6 * * *"]  # Run every 6 hours
+crons = ["0 */6 * * *", "* * * * *"]  # Every 6h (pre-warm) + every 1m (Spectrum polling, only runs if enabled)
+
