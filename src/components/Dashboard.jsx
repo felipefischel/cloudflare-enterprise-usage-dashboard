@@ -271,7 +271,7 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
       const sp = metricsData.spectrum, cfg = netCfg.spectrum || {};
       const spdt = cfg.dataTransferThreshold ? cfg.dataTransferThreshold * 1e12 : null;
       add('spectrum-transfer', 'Spectrum — Data Transfer', 'Network Services', sp.current?.dataTransfer || 0, spdt, fmtBytes(sp.current?.dataTransfer || 0), spdt ? fmtBytes(spdt) : '');
-      add('spectrum-conns', 'Spectrum — Connections', 'Network Services', sp.current?.p99Concurrent || 0, cfg.connectionsThreshold, fmtNum(sp.current?.p99Concurrent || 0), cfg.connectionsThreshold ? fmtNum(cfg.connectionsThreshold) : '');
+      add('spectrum-conns', 'Spectrum — Connections', 'Network Services', sp.current?.p95Concurrent || 0, cfg.connectionsThreshold, fmtNum(sp.current?.p95Concurrent || 0), cfg.connectionsThreshold ? fmtNum(cfg.connectionsThreshold) : '');
     }
 
     const devCfg = config?.developerServices || {};
@@ -1037,9 +1037,9 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
             const existing = timeSeriesMap.get(ts.month);
             if (existing) {
               existing.dataTransfer += ts.dataTransfer || 0;
-              existing.p99Concurrent = Math.max(existing.p99Concurrent, ts.p99Concurrent || 0);
+              existing.p95Concurrent = Math.max(existing.p95Concurrent, ts.p95Concurrent || 0);
             } else {
-              timeSeriesMap.set(ts.month, { ...ts, dataTransfer: ts.dataTransfer || 0, p99Concurrent: ts.p99Concurrent || 0 });
+              timeSeriesMap.set(ts.month, { ...ts, dataTransfer: ts.dataTransfer || 0, p95Concurrent: ts.p95Concurrent || 0 });
             }
           });
         });
@@ -1049,11 +1049,11 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
           connectionsThreshold: config?.networkServices?.spectrum?.connectionsThreshold || metrics.spectrum.connectionsThreshold,
           current: {
             dataTransfer: accountSpecZones.reduce((s, z) => s + (z.current?.dataTransfer || 0), 0),
-            p99Concurrent: Math.max(...accountSpecZones.map(z => z.current?.p99Concurrent || 0)),
+            p95Concurrent: Math.max(...accountSpecZones.map(z => z.current?.p95Concurrent || 0)),
           },
           previous: {
             dataTransfer: accountSpecZones.reduce((s, z) => s + (z.previous?.dataTransfer || 0), 0),
-            p99Concurrent: Math.max(...accountSpecZones.map(z => z.previous?.p99Concurrent || 0)),
+            p95Concurrent: Math.max(...accountSpecZones.map(z => z.previous?.p95Concurrent || 0)),
           },
           timeSeries: Array.from(timeSeriesMap.values()).sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp)),
           perZoneData: accountSpecZones,
@@ -1120,7 +1120,7 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
   };
 
   // Show progress screen during initial setup OR when no metrics yet
-  if (isInitialSetup || (loading && !metrics)) {
+  if (isInitialSetup) {
     // Show enhanced loading for initial setup
     const showProgress = (isInitialSetup || !cacheAge) && loadingPhase;
     
@@ -1636,7 +1636,17 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
         {showEgress ? (
           <>
             <ConsolidatedCard
-              title="Magic Transit (Ingress)"
+              title={
+                <span className="inline-flex items-center gap-1.5">
+                  Magic Transit (Ingress)
+                  <span className="group relative">
+                    <Info className="w-3.5 h-3.5 text-gray-400 cursor-help" />
+                    <span className="invisible group-hover:visible absolute top-full left-0 mt-2 w-64 p-2.5 bg-gray-900 text-white text-xs rounded-lg shadow-lg z-50 leading-relaxed">
+                      Bandwidth data is cached for up to 6 hours to optimize refresh performance.
+                    </span>
+                  </span>
+                </span>
+              }
               subtitle="P95th Bandwidth"
               value={mt.current?.ingressP95Mbps || 0}
               formatted={formatBandwidth(mt.current?.ingressP95Mbps || 0)}
@@ -1650,7 +1660,17 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
               yAxisLabel="Mbps"
             />
             <ConsolidatedCard
-              title="Magic Transit (Egress)"
+              title={
+                <span className="inline-flex items-center gap-1.5">
+                  Magic Transit (Egress)
+                  <span className="group relative">
+                    <Info className="w-3.5 h-3.5 text-gray-400 cursor-help" />
+                    <span className="invisible group-hover:visible absolute top-full left-0 mt-2 w-64 p-2.5 bg-gray-900 text-white text-xs rounded-lg shadow-lg z-50 leading-relaxed">
+                      Bandwidth data is cached for up to 6 hours to optimize refresh performance.
+                    </span>
+                  </span>
+                </span>
+              }
               subtitle="P95th Bandwidth"
               value={mt.current?.egressP95Mbps || 0}
               formatted={formatBandwidth(mt.current?.egressP95Mbps || 0)}
@@ -1666,7 +1686,17 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
           </>
         ) : (
           <ConsolidatedCard
-            title="Magic Transit"
+            title={
+              <span className="inline-flex items-center gap-1.5">
+                Magic Transit
+                <span className="group relative">
+                  <Info className="w-3.5 h-3.5 text-gray-400 cursor-help" />
+                  <span className="invisible group-hover:visible absolute top-full left-0 mt-2 w-64 p-2.5 bg-gray-900 text-white text-xs rounded-lg shadow-lg z-50 leading-relaxed">
+                    Bandwidth data is cached for up to 6 hours to optimize refresh performance.
+                  </span>
+                </span>
+              </span>
+            }
             subtitle="P95th Bandwidth"
             value={mt.current?.p95Mbps || 0}
             formatted={formatBandwidth(mt.current?.p95Mbps || 0)}
@@ -1707,7 +1737,17 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
     return (
       <div className="space-y-6">
         <ConsolidatedCard
-          title="Data Transfer"
+          title={
+            <span className="inline-flex items-center gap-1.5">
+              Data Transfer
+              <span className="group relative">
+                <Info className="w-3.5 h-3.5 text-gray-400 cursor-help" />
+                <span className="invisible group-hover:visible absolute top-full left-0 mt-2 w-64 p-2.5 bg-gray-900 text-white text-xs rounded-lg shadow-lg z-50 leading-relaxed">
+                  Data transfer is cached for up to 6 hours to optimize refresh performance.
+                </span>
+              </span>
+            </span>
+          }
           subtitle="Spectrum ingress + egress bytes"
           value={spec.current?.dataTransfer || 0}
           formatted={formatDataTransfer(spec.current?.dataTransfer || 0)}
@@ -1725,27 +1765,27 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
           <ConsolidatedCard
             title={
               <span className="inline-flex items-center gap-1.5">
-                Concurrent Connections (P99)
+                Concurrent Connections (P95)
                 <span className="group relative">
                   <Info className="w-3.5 h-3.5 text-gray-400 cursor-help" />
                   <span className="invisible group-hover:visible absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-72 p-2.5 bg-gray-900 text-white text-xs rounded-lg shadow-lg z-50 leading-relaxed">
-                    P99 is calculated from per-minute samples collected since Spectrum was enabled. For an accurate monthly P99, ensure Spectrum is configured from the 1st of the month.
+                    P95 is calculated from per-minute samples, zero-filled from the start of the month. For accurate results, ensure Spectrum is configured from the 1st of the month.
                   </span>
                 </span>
               </span>
             }
-            subtitle="P99 of per-minute concurrent client samples"
-            value={spec.current?.p99Concurrent || 0}
-            formatted={formatConnections(spec.current?.p99Concurrent || 0)}
+            subtitle="P95 of per-minute concurrent client samples"
+            value={spec.current?.p95Concurrent || 0}
+            formatted={formatConnections(spec.current?.p95Concurrent || 0)}
             threshold={spec.connectionsThreshold}
-            percentage={calculatePercentage(spec.current?.p99Concurrent || 0, spec.connectionsThreshold)}
+            percentage={calculatePercentage(spec.current?.p95Concurrent || 0, spec.connectionsThreshold)}
             icon="connections"
             unit=""
             color="#06b6d4"
             timeSeries={spec.timeSeries}
-            dataKey="p99Concurrent"
+            dataKey="p95Concurrent"
             chartFormatter={formatConnections}
-            yAxisLabel="P99 Concurrent"
+            yAxisLabel="P95 Concurrent"
           />
         </div>
       </div>
@@ -2319,7 +2359,17 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
     return (
       <div className="space-y-6">
         <ConsolidatedCard
-          title="WAN"
+          title={
+            <span className="inline-flex items-center gap-1.5">
+              WAN
+              <span className="group relative">
+                <Info className="w-3.5 h-3.5 text-gray-400 cursor-help" />
+                <span className="invisible group-hover:visible absolute top-full left-0 mt-2 w-64 p-2.5 bg-gray-900 text-white text-xs rounded-lg shadow-lg z-50 leading-relaxed">
+                  Bandwidth data is cached for up to 6 hours to optimize refresh performance.
+                </span>
+              </span>
+            </span>
+          }
           subtitle="P95th Bandwidth"
           value={wan.current?.p95Mbps || 0}
           formatted={formatBandwidth(wan.current?.p95Mbps || 0)}

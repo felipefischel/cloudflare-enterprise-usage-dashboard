@@ -132,9 +132,11 @@ function ConsolidatedCard({
 
   const gradientId = `gradient-${color.replace('#', '')}-${dataKey || 'default'}`;
 
+  const MONTH_ABBREVS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   const formatXAxis = (timestamp) => {
     try {
-      return format(new Date(timestamp), 'MMM yy');
+      const [y, m] = timestamp.split('T')[0].split('-');
+      return `${MONTH_ABBREVS[parseInt(m, 10) - 1]} ${y.slice(2)}`;
     } catch {
       return timestamp;
     }
@@ -148,9 +150,14 @@ function ConsolidatedCard({
   const CustomTooltip = ({ active, payload, label }) => {
     if (active && payload && payload.length) {
       const dataPoint = payload[0].payload;
-      const monthLabel = dataPoint.month
-        ? format(new Date(dataPoint.timestamp), 'MMMM yyyy')
-        : format(new Date(label), 'MMM dd, yyyy');
+      const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+      let monthLabel;
+      if (dataPoint.month) {
+        const [y, m] = dataPoint.month.split('-');
+        monthLabel = `${MONTH_NAMES[parseInt(m, 10) - 1]} ${y}`;
+      } else {
+        monthLabel = format(new Date(label), 'MMM dd, yyyy');
+      }
       return (
         <div className="bg-white border border-gray-200 rounded-lg shadow-lg p-3">
           <p className="text-sm font-medium text-gray-900 mb-1">{monthLabel}</p>

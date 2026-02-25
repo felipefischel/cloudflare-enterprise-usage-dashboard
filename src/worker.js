@@ -334,1633 +334,14 @@ async function getMetricsProgressive(request, env, corsHeaders) {
       );
     }
 
-    // Phase 3: Full data including historical (SLOW - 10s)
-    // Only fetch metrics that are ENABLED in config
+    // Phase 3: Full data including historical
     const configData = await env.CONFIG_KV.get('config:default');
     const config = configData ? JSON.parse(configData) : {};
-    console.log('Loaded config from KV - networkServices:', JSON.stringify(config?.networkServices));
-    
-    const timings = {}; // Track timing for each API call section
-    const overallStart = Date.now();
-    
-    let coreMetrics = null;
-    let botManagementData = null;
-    let successfulMetrics = []; // ✅ Declare outside if block so add-ons can use it!
-    
-    // Fetch App Services Core if any of Enterprise Zones, Traffic, or DNS is enabled
-    const coreEnabled = config?.applicationServices?.core?.enabled !== false;
-    const trafficEnabled = config?.applicationServices?.core?.trafficEnabled !== undefined ? config.applicationServices.core.trafficEnabled : coreEnabled;
-    const dnsEnabled = config?.applicationServices?.core?.dnsEnabled !== undefined ? config.applicationServices.core.dnsEnabled : coreEnabled;
-    const anyCoreEnabled = coreEnabled || trafficEnabled || dnsEnabled;
-    if (anyCoreEnabled) {
-      const coreStart = Date.now();
-      console.log('📊 Fetching App Services Core metrics...');
-      const accountMetricsPromises = accountIds.map(accountId => 
-        fetchAccountMetrics(apiKey, accountId, env)
-      );
-      
-      const accountMetricsResults = await Promise.allSettled(accountMetricsPromises);
-      successfulMetrics = accountMetricsResults
-        .filter(result => result.status === 'fulfilled')
-        .map(result => result.value);
-      
-      if (successfulMetrics.length > 0) {
-        coreMetrics = aggregateAccountMetrics(successfulMetrics);
-      } else {
-        console.warn('⚠️ Failed to fetch core metrics from any account');
-      }
-      timings.appServicesCore = Date.now() - coreStart;
-      console.log(`⏱️ App Services Core: ${timings.appServicesCore}ms`);
-    } else {
-      console.log('⏭️ App Services Core disabled - skipping fetch');
-    }
-    
-    // Fetch Bot Management if enabled
-    if (config?.applicationServices?.botManagement?.enabled && accountIds.length > 0) {
-      const botStart = Date.now();
-      console.log('🤖 Fetching Bot Management metrics...');
-      const botManagementConfig = config.applicationServices.botManagement;
-      
-      const botMgmtPromises = accountIds.map(accountId =>
-        fetchBotManagementForAccount(apiKey, accountId, botManagementConfig, env)
-          .then(data => ({ accountId, data })) // ✅ Include accountId with data
-      );
-      
-      const botMgmtResults = await Promise.allSettled(botMgmtPromises);
-      const botMgmtData = botMgmtResults
-        .filter(result => result.status === 'fulfilled' && result.value?.data) // Check data exists
-        .map(result => result.value); // Now has { accountId, data }
-      
-      // Aggregate bot management across accounts
-      if (botMgmtData.length > 0) {
-        // Merge timeSeries from all accounts
-        const timeSeriesMap = new Map();
-        botMgmtData.forEach(accountEntry => {
-          if (accountEntry.data.timeSeries) {
-            accountEntry.data.timeSeries.forEach(entry => {
-              const existing = timeSeriesMap.get(entry.month);
-              if (existing) {
-                existing.likelyHuman += entry.likelyHuman || 0;
-              } else {
-                timeSeriesMap.set(entry.month, {
-                  month: entry.month,
-                  timestamp: entry.timestamp,
-                  likelyHuman: entry.likelyHuman || 0,
-                });
-              }
-            });
-          }
-        });
-
-        const mergedTimeSeries = Array.from(timeSeriesMap.values())
-          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
-        // Aggregate confidence from all accounts
-        const botManagementConfidence = botMgmtData.find(entry => entry.data.current?.confidence)?.data.current.confidence || null;
-
-        botManagementData = {
-          enabled: true,
-          threshold: botManagementConfig.threshold,
-          current: {
-            likelyHuman: botMgmtData.reduce((sum, entry) => sum + entry.data.current.likelyHuman, 0),
-            zones: botMgmtData.flatMap(entry => entry.data.current.zones),
-            confidence: botManagementConfidence,
-          },
-          previous: {
-            likelyHuman: botMgmtData.reduce((sum, entry) => sum + entry.data.previous.likelyHuman, 0),
-            zones: botMgmtData.flatMap(entry => entry.data.previous.zones),
-          },
-          timeSeries: mergedTimeSeries,
-          // Store per-account data for filtering
-          perAccountData: botMgmtData.map(entry => ({
-            accountId: entry.accountId, // ✅ Use correct accountId
-            current: entry.data.current,
-            previous: entry.data.previous,
-            timeSeries: entry.data.timeSeries,
-          })),
-        };
-      }
-      timings.botManagement = Date.now() - botStart;
-      console.log(`⏱️ Bot Management: ${timings.botManagement}ms`);
-    } else {
-      console.log('⏭️ Bot Management disabled - skipping fetch');
-    }
-    
-    // Fetch API Shield if enabled (reuses existing zone data!)
-    let apiShieldData = null;
-    if (config?.applicationServices?.apiShield?.enabled && successfulMetrics && successfulMetrics.length > 0) {
-      const apiShieldStart = Date.now();
-      console.log('🛡️ Calculating API Shield metrics from existing zone data...');
-      const apiShieldConfig = config.applicationServices.apiShield;
-      
-      const apiShieldPromises = successfulMetrics.map(accountData =>
-        calculateZoneBasedAddonForAccount(accountData, apiShieldConfig, env, 'api-shield')
-          .then(data => ({ accountId: accountData.accountId, data }))
-      );
-      
-      const apiShieldResults = await Promise.allSettled(apiShieldPromises);
-      const apiShieldAccounts = apiShieldResults
-        .filter(result => result.status === 'fulfilled' && result.value?.data)
-        .map(result => result.value);
-      
-      if (apiShieldAccounts.length > 0) {
-        // Merge timeSeries
-        const timeSeriesMap = new Map();
-        apiShieldAccounts.forEach(accountEntry => {
-          if (accountEntry.data.timeSeries) {
-            accountEntry.data.timeSeries.forEach(entry => {
-              const existing = timeSeriesMap.get(entry.month);
-              if (existing) {
-                existing.requests += entry.requests || 0;
-              } else {
-                timeSeriesMap.set(entry.month, {
-                  month: entry.month,
-                  timestamp: entry.timestamp,
-                  requests: entry.requests || 0,
-                });
-              }
-            });
-          }
-        });
-
-        const mergedTimeSeries = Array.from(timeSeriesMap.values())
-          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
-        // Aggregate confidence from all accounts (use first non-null confidence as they should all be the same)
-        const apiShieldConfidence = apiShieldAccounts.find(entry => entry.data.current?.confidence)?.data.current.confidence || null;
-
-        apiShieldData = {
-          enabled: true,
-          threshold: apiShieldConfig.threshold,
-          current: {
-            requests: apiShieldAccounts.reduce((sum, entry) => sum + entry.data.current.requests, 0),
-            zones: apiShieldAccounts.flatMap(entry => entry.data.current.zones),
-            confidence: apiShieldConfidence,
-          },
-          previous: {
-            requests: apiShieldAccounts.reduce((sum, entry) => sum + entry.data.previous.requests, 0),
-            zones: apiShieldAccounts.flatMap(entry => entry.data.previous.zones),
-          },
-          timeSeries: mergedTimeSeries,
-          perAccountData: apiShieldAccounts.map(entry => ({
-            accountId: entry.accountId,
-            current: entry.data.current,
-            previous: entry.data.previous,
-            timeSeries: entry.data.timeSeries,
-          })),
-        };
-        console.log(`API Shield data calculated (${apiShieldData.current.zones.length} zones)`);
-      }
-      timings.apiShield = Date.now() - apiShieldStart;
-      console.log(`⏱️ API Shield: ${timings.apiShield}ms`);
-    } else {
-      console.log('⏭️ API Shield disabled - skipping calculation');
-    }
-    
-    // Fetch Page Shield if enabled (reuses existing zone data!)
-    let pageShieldData = null;
-    if (config?.applicationServices?.pageShield?.enabled && successfulMetrics && successfulMetrics.length > 0) {
-      const pageShieldStart = Date.now();
-      console.log('📄 Calculating Page Shield metrics from existing zone data...');
-      const pageShieldConfig = config.applicationServices.pageShield;
-      
-      const pageShieldPromises = successfulMetrics.map(accountData =>
-        calculateZoneBasedAddonForAccount(accountData, pageShieldConfig, env, 'page-shield')
-          .then(data => ({ accountId: accountData.accountId, data }))
-      );
-      
-      const pageShieldResults = await Promise.allSettled(pageShieldPromises);
-      const pageShieldAccounts = pageShieldResults
-        .filter(result => result.status === 'fulfilled' && result.value?.data)
-        .map(result => result.value);
-      
-      if (pageShieldAccounts.length > 0) {
-        // Merge timeSeries
-        const timeSeriesMap = new Map();
-        pageShieldAccounts.forEach(accountEntry => {
-          if (accountEntry.data.timeSeries) {
-            accountEntry.data.timeSeries.forEach(entry => {
-              const existing = timeSeriesMap.get(entry.month);
-              if (existing) {
-                existing.requests += entry.requests || 0;
-              } else {
-                timeSeriesMap.set(entry.month, {
-                  month: entry.month,
-                  timestamp: entry.timestamp,
-                  requests: entry.requests || 0,
-                });
-              }
-            });
-          }
-        });
-
-        const mergedTimeSeries = Array.from(timeSeriesMap.values())
-          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
-        // Aggregate confidence from all accounts (use first non-null confidence as they should all be the same)
-        const pageShieldConfidence = pageShieldAccounts.find(entry => entry.data.current?.confidence)?.data.current.confidence || null;
-
-        pageShieldData = {
-          enabled: true,
-          threshold: pageShieldConfig.threshold,
-          current: {
-            requests: pageShieldAccounts.reduce((sum, entry) => sum + entry.data.current.requests, 0),
-            zones: pageShieldAccounts.flatMap(entry => entry.data.current.zones),
-            confidence: pageShieldConfidence,
-          },
-          previous: {
-            requests: pageShieldAccounts.reduce((sum, entry) => sum + entry.data.previous.requests, 0),
-            zones: pageShieldAccounts.flatMap(entry => entry.data.previous.zones),
-          },
-          timeSeries: mergedTimeSeries,
-          perAccountData: pageShieldAccounts.map(entry => ({
-            accountId: entry.accountId,
-            current: entry.data.current,
-            previous: entry.data.previous,
-            timeSeries: entry.data.timeSeries,
-          })),
-        };
-        console.log(`Page Shield data calculated (${pageShieldData.current.zones.length} zones)`);
-      }
-      timings.pageShield = Date.now() - pageShieldStart;
-      console.log(`⏱️ Page Shield: ${timings.pageShield}ms`);
-    } else {
-      console.log('⏭️ Page Shield disabled - skipping calculation');
-    }
-    
-    // Fetch Advanced Rate Limiting if enabled (reuses existing zone data!)
-    let advancedRateLimitingData = null;
-    if (config?.applicationServices?.advancedRateLimiting?.enabled && successfulMetrics && successfulMetrics.length > 0) {
-      const rateLimitingStart = Date.now();
-      console.log('⚡ Calculating Advanced Rate Limiting metrics from existing zone data...');
-      const rateLimitingConfig = config.applicationServices.advancedRateLimiting;
-      
-      const rateLimitingPromises = successfulMetrics.map(accountData =>
-        calculateZoneBasedAddonForAccount(accountData, rateLimitingConfig, env, 'advanced-rate-limiting')
-          .then(data => ({ accountId: accountData.accountId, data }))
-      );
-      
-      const rateLimitingResults = await Promise.allSettled(rateLimitingPromises);
-      const rateLimitingAccounts = rateLimitingResults
-        .filter(result => result.status === 'fulfilled' && result.value?.data)
-        .map(result => result.value);
-      
-      if (rateLimitingAccounts.length > 0) {
-        // Merge timeSeries
-        const timeSeriesMap = new Map();
-        rateLimitingAccounts.forEach(accountEntry => {
-          if (accountEntry.data.timeSeries) {
-            accountEntry.data.timeSeries.forEach(entry => {
-              const existing = timeSeriesMap.get(entry.month);
-              if (existing) {
-                existing.requests += entry.requests || 0;
-              } else {
-                timeSeriesMap.set(entry.month, {
-                  month: entry.month,
-                  timestamp: entry.timestamp,
-                  requests: entry.requests || 0,
-                });
-              }
-            });
-          }
-        });
-
-        const mergedTimeSeries = Array.from(timeSeriesMap.values())
-          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
-        // Aggregate confidence from all accounts (use first non-null confidence as they should all be the same)
-        const rateLimitingConfidence = rateLimitingAccounts.find(entry => entry.data.current?.confidence)?.data.current.confidence || null;
-
-        advancedRateLimitingData = {
-          enabled: true,
-          threshold: rateLimitingConfig.threshold,
-          current: {
-            requests: rateLimitingAccounts.reduce((sum, entry) => sum + entry.data.current.requests, 0),
-            zones: rateLimitingAccounts.flatMap(entry => entry.data.current.zones),
-            confidence: rateLimitingConfidence,
-          },
-          previous: {
-            requests: rateLimitingAccounts.reduce((sum, entry) => sum + entry.data.previous.requests, 0),
-            zones: rateLimitingAccounts.flatMap(entry => entry.data.previous.zones),
-          },
-          timeSeries: mergedTimeSeries,
-          perAccountData: rateLimitingAccounts.map(entry => ({
-            accountId: entry.accountId,
-            current: entry.data.current,
-            previous: entry.data.previous,
-            timeSeries: entry.data.timeSeries,
-          })),
-        };
-        console.log(`Advanced Rate Limiting data calculated (${advancedRateLimitingData.current.zones.length} zones)`);
-      }
-      timings.advancedRateLimiting = Date.now() - rateLimitingStart;
-      console.log(`⏱️ Advanced Rate Limiting: ${timings.advancedRateLimiting}ms`);
-    } else {
-      console.log('⏭️ Advanced Rate Limiting disabled - skipping calculation');
-    }
-
-    // Calculate Argo Smart Routing if enabled (reuses existing zone data!)
-    let argoData = null;
-    if (config?.applicationServices?.argo?.enabled && successfulMetrics && successfulMetrics.length > 0) {
-      const argoStart = Date.now();
-      console.log('🚀 Calculating Argo Smart Routing metrics from existing zone data...');
-      const argoConfig = config.applicationServices.argo;
-
-      const argoPromises = successfulMetrics.map(accountData =>
-        calculateArgoForAccount(accountData, argoConfig, env)
-          .then(data => ({ accountId: accountData.accountId, data }))
-      );
-
-      const argoResults = await Promise.allSettled(argoPromises);
-      const argoAccounts = argoResults
-        .filter(result => result.status === 'fulfilled' && result.value?.data)
-        .map(result => result.value);
-
-      if (argoAccounts.length > 0) {
-        const timeSeriesMap = new Map();
-        argoAccounts.forEach(accountEntry => {
-          if (accountEntry.data.timeSeries) {
-            accountEntry.data.timeSeries.forEach(entry => {
-              const existing = timeSeriesMap.get(entry.month);
-              if (existing) {
-                existing.bytes += entry.bytes || 0;
-              } else {
-                timeSeriesMap.set(entry.month, {
-                  month: entry.month,
-                  timestamp: entry.timestamp,
-                  bytes: entry.bytes || 0,
-                });
-              }
-            });
-          }
-        });
-
-        const mergedTimeSeries = Array.from(timeSeriesMap.values())
-          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
-        const argoConfidence = argoAccounts.find(entry => entry.data.current?.confidence)?.data.current.confidence || null;
-
-        argoData = {
-          enabled: true,
-          threshold: argoConfig.threshold,
-          current: {
-            bytes: argoAccounts.reduce((sum, entry) => sum + entry.data.current.bytes, 0),
-            zones: argoAccounts.flatMap(entry => entry.data.current.zones),
-            confidence: argoConfidence,
-          },
-          previous: {
-            bytes: argoAccounts.reduce((sum, entry) => sum + entry.data.previous.bytes, 0),
-            zones: argoAccounts.flatMap(entry => entry.data.previous.zones),
-          },
-          timeSeries: mergedTimeSeries,
-          perAccountData: argoAccounts.map(entry => ({
-            accountId: entry.accountId,
-            current: entry.data.current,
-            previous: entry.data.previous,
-            timeSeries: entry.data.timeSeries,
-          })),
-        };
-        console.log(`Argo data calculated (${argoData.current.zones.length} zones, ${(argoData.current.bytes / 1e9).toFixed(2)} GB)`);
-      }
-      timings.argo = Date.now() - argoStart;
-      console.log(`⏱️ Argo: ${timings.argo}ms`);
-    } else {
-      console.log('⏭️ Argo disabled - skipping calculation');
-    }
-    
-    // Fetch Zero Trust Seats if enabled
-    let zeroTrustSeatsData = null;
-    const ztSeatsAccountIds = config?.zeroTrust?.seats?.accountIds || [];
-    if (config?.zeroTrust?.seats?.enabled && ztSeatsAccountIds.length > 0) {
-      const ztSeatsStart = Date.now();
-      console.log(`🔐 Fetching Zero Trust Seats for ${ztSeatsAccountIds.length} account(s)...`);
-      const seatsConfig = config.zeroTrust.seats;
-      
-      const seatsPromises = ztSeatsAccountIds.map(accountId =>
-        fetchZeroTrustSeatsForAccount(apiKey, accountId, seatsConfig, env)
-          .then(data => ({ accountId, data }))
-      );
-      
-      const seatsResults = await Promise.allSettled(seatsPromises);
-      const seatsData = seatsResults
-        .filter(result => result.status === 'fulfilled' && result.value?.data)
-        .map(result => result.value);
-      
-      if (seatsData.length > 0) {
-        // Merge timeSeries from all accounts
-        const timeSeriesMap = new Map();
-        seatsData.forEach(accountEntry => {
-          if (accountEntry.data.timeSeries) {
-            accountEntry.data.timeSeries.forEach(entry => {
-              const existing = timeSeriesMap.get(entry.month);
-              if (existing) {
-                existing.seats += entry.seats || 0;
-              } else {
-                timeSeriesMap.set(entry.month, {
-                  month: entry.month,
-                  timestamp: entry.timestamp,
-                  seats: entry.seats || 0,
-                });
-              }
-            });
-          }
-        });
-
-        const mergedTimeSeries = Array.from(timeSeriesMap.values())
-          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
-        zeroTrustSeatsData = {
-          enabled: true,
-          threshold: seatsConfig.threshold,
-          current: {
-            seats: seatsData.reduce((sum, entry) => sum + entry.data.current.seats, 0),
-          },
-          previous: {
-            seats: seatsData.reduce((sum, entry) => sum + entry.data.previous.seats, 0),
-          },
-          timeSeries: mergedTimeSeries,
-          perAccountData: seatsData.map(entry => ({
-            accountId: entry.accountId,
-            current: entry.data.current,
-            previous: entry.data.previous,
-            timeSeries: entry.data.timeSeries,
-          })),
-        };
-        console.log(`Zero Trust Seats: ${zeroTrustSeatsData.current.seats} current, ${zeroTrustSeatsData.previous.seats} previous`);
-      }
-      timings.zeroTrustSeats = Date.now() - ztSeatsStart;
-      console.log(`⏱️ Zero Trust Seats: ${timings.zeroTrustSeats}ms`);
-    } else {
-      console.log('⏭️ Zero Trust Seats disabled - skipping fetch');
-    }
-    
-    // Fetch Workers & Pages if enabled
-    let workersPagesData = null;
-    const wpAccountIds = config?.developerServices?.workersPages?.accountIds || [];
-    if (config?.developerServices?.workersPages?.enabled && wpAccountIds.length > 0) {
-      const wpStart = Date.now();
-      console.log(`⚡ Fetching Workers & Pages for ${wpAccountIds.length} account(s)...`);
-      const wpConfig = config.developerServices.workersPages;
-      
-      const wpPromises = wpAccountIds.map(accountId =>
-        fetchWorkersPagesForAccount(apiKey, accountId, wpConfig, env)
-          .then(data => ({ accountId, data }))
-      );
-      
-      const wpResults = await Promise.allSettled(wpPromises);
-      const wpData = wpResults
-        .filter(result => result.status === 'fulfilled' && result.value?.data)
-        .map(result => result.value);
-      
-      if (wpData.length > 0) {
-        // Merge timeSeries from all accounts
-        const timeSeriesMap = new Map();
-        wpData.forEach(accountEntry => {
-          if (accountEntry.data.timeSeries) {
-            accountEntry.data.timeSeries.forEach(entry => {
-              const existing = timeSeriesMap.get(entry.month);
-              if (existing) {
-                existing.requests += entry.requests || 0;
-                existing.cpuTimeMs += entry.cpuTimeMs || 0;
-              } else {
-                timeSeriesMap.set(entry.month, {
-                  month: entry.month,
-                  timestamp: entry.timestamp,
-                  requests: entry.requests || 0,
-                  cpuTimeMs: entry.cpuTimeMs || 0,
-                });
-              }
-            });
-          }
-        });
-
-        const mergedTimeSeries = Array.from(timeSeriesMap.values())
-          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
-        const wpConfidenceAgg = wpData.reduce((agg, entry) => {
-          const conf = entry.data.current.confidence;
-          if (conf) {
-            agg.estimate += conf.estimate || 0;
-            agg.lower += conf.lower || 0;
-            agg.upper += conf.upper || 0;
-            agg.sampleSize += conf.sampleSize || 0;
-            agg.hasData = true;
-          }
-          return agg;
-        }, { estimate: 0, lower: 0, upper: 0, sampleSize: 0, hasData: false });
-
-        let wpConfidence = null;
-        if (wpConfidenceAgg.hasData && wpConfidenceAgg.estimate > 0) {
-          const intervalWidth = wpConfidenceAgg.upper - wpConfidenceAgg.lower;
-          const relativeWidth = intervalWidth / (2 * wpConfidenceAgg.estimate);
-          const confidencePercent = Math.max(0, Math.min(100, 100 * (1 - relativeWidth)));
-          wpConfidence = {
-            percent: Math.round(confidencePercent * 10) / 10,
-            sampleSize: wpConfidenceAgg.sampleSize,
-            estimate: wpConfidenceAgg.estimate,
-            lower: wpConfidenceAgg.lower,
-            upper: wpConfidenceAgg.upper,
-          };
-        }
-
-        workersPagesData = {
-          enabled: true,
-          requestsThreshold: wpConfig.requestsThreshold,
-          cpuTimeThreshold: wpConfig.cpuTimeThreshold,
-          current: {
-            requests: wpData.reduce((sum, entry) => sum + entry.data.current.requests, 0),
-            cpuTimeMs: wpData.reduce((sum, entry) => sum + entry.data.current.cpuTimeMs, 0),
-            confidence: wpConfidence,
-          },
-          previous: {
-            requests: wpData.reduce((sum, entry) => sum + entry.data.previous.requests, 0),
-            cpuTimeMs: wpData.reduce((sum, entry) => sum + entry.data.previous.cpuTimeMs, 0),
-          },
-          timeSeries: mergedTimeSeries,
-          perAccountData: wpData.map(entry => ({
-            accountId: entry.accountId,
-            current: entry.data.current,
-            previous: entry.data.previous,
-            timeSeries: entry.data.timeSeries,
-          })),
-        };
-        console.log(`Workers & Pages: ${workersPagesData.current.requests.toLocaleString()} requests, ${workersPagesData.current.cpuTimeMs.toLocaleString()} ms CPU time${wpConfidence ? `, confidence: ${wpConfidence.percent}%` : ''}`);
-      }
-      timings.workersPages = Date.now() - wpStart;
-      console.log(`⏱️ Workers & Pages: ${timings.workersPages}ms`);
-    } else {
-      console.log('⏭️ Workers & Pages disabled - skipping fetch');
-    }
-    
-    // Fetch R2 Storage if enabled
-    let r2StorageData = null;
-    const r2AccountIds = config?.developerServices?.r2Storage?.accountIds || [];
-    if (config?.developerServices?.r2Storage?.enabled && r2AccountIds.length > 0) {
-      const r2Start = Date.now();
-      console.log(`📦 Fetching R2 Storage for ${r2AccountIds.length} account(s)...`);
-      const r2Config = config.developerServices.r2Storage;
-      
-      const r2Results = await Promise.allSettled(
-        r2AccountIds.map(accountId =>
-          fetchR2StorageForAccount(apiKey, accountId, r2Config, env)
-            .then(data => ({ accountId, data }))
-        )
-      );
-      
-      const successfulR2 = r2Results
-        .filter(r => r.status === 'fulfilled' && r.value?.data)
-        .map(r => r.value);
-      
-      if (successfulR2.length > 0) {
-        const timeSeriesMap = new Map();
-        successfulR2.forEach(accountEntry => {
-          if (accountEntry.data.timeSeries) {
-            accountEntry.data.timeSeries.forEach(entry => {
-              const existing = timeSeriesMap.get(entry.month);
-              if (existing) {
-                existing.classAOps += entry.classAOps || 0;
-                existing.classBOps += entry.classBOps || 0;
-                existing.storageGB += entry.storageGB || 0;
-              } else {
-                timeSeriesMap.set(entry.month, {
-                  month: entry.month,
-                  timestamp: entry.timestamp,
-                  classAOps: entry.classAOps || 0,
-                  classBOps: entry.classBOps || 0,
-                  storageGB: entry.storageGB || 0,
-                });
-              }
-            });
-          }
-        });
-
-        const mergedTimeSeries = Array.from(timeSeriesMap.values())
-          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
-        r2StorageData = {
-          enabled: true,
-          classAOpsThreshold: r2Config.classAOpsThreshold,
-          classBOpsThreshold: r2Config.classBOpsThreshold,
-          storageThreshold: r2Config.storageThreshold,
-          current: {
-            classAOps: successfulR2.reduce((sum, e) => sum + (e.data.current?.classAOps || 0), 0),
-            classBOps: successfulR2.reduce((sum, e) => sum + (e.data.current?.classBOps || 0), 0),
-            storageGB: successfulR2.reduce((sum, e) => sum + (e.data.current?.storageGB || 0), 0),
-          },
-          previous: {
-            classAOps: successfulR2.reduce((sum, e) => sum + (e.data.previous?.classAOps || 0), 0),
-            classBOps: successfulR2.reduce((sum, e) => sum + (e.data.previous?.classBOps || 0), 0),
-            storageGB: successfulR2.reduce((sum, e) => sum + (e.data.previous?.storageGB || 0), 0),
-          },
-          timeSeries: mergedTimeSeries,
-          perAccountData: successfulR2.map(entry => ({
-            accountId: entry.accountId,
-            current: entry.data.current,
-            previous: entry.data.previous,
-            timeSeries: entry.data.timeSeries,
-          })),
-        };
-        console.log(`R2 Storage: ${r2StorageData.current.classAOps.toLocaleString()} Class A ops, ${r2StorageData.current.classBOps.toLocaleString()} Class B ops, ${r2StorageData.current.storageGB.toFixed(2)} GB`);
-      }
-      timings.r2Storage = Date.now() - r2Start;
-      console.log(`⏱️ R2 Storage: ${timings.r2Storage}ms`);
-    } else {
-      console.log('⏭️ R2 Storage disabled - skipping fetch');
-    }
-
-    // Fetch D1 if enabled
-    let d1Data = null;
-    const d1AccountIds = config?.developerServices?.d1?.accountIds || [];
-    if (config?.developerServices?.d1?.enabled && d1AccountIds.length > 0) {
-      const d1Start = Date.now();
-      console.log(`🗄️ Fetching D1 for ${d1AccountIds.length} account(s)...`);
-      const d1Config = config.developerServices.d1;
-
-      const d1Results = await Promise.allSettled(
-        d1AccountIds.map(accountId =>
-          fetchD1ForAccount(apiKey, accountId, d1Config, env)
-            .then(data => ({ accountId, data }))
-        )
-      );
-
-      const successfulD1Results = d1Results
-        .filter(r => r.status === 'fulfilled' && r.value?.data)
-        .map(r => r.value);
-
-      if (successfulD1Results.length > 0) {
-        const timeSeriesMap = new Map();
-        successfulD1Results.forEach(accountEntry => {
-          if (accountEntry.data.timeSeries) {
-            accountEntry.data.timeSeries.forEach(entry => {
-              const existing = timeSeriesMap.get(entry.month);
-              if (existing) {
-                existing.rowsRead += entry.rowsRead || 0;
-                existing.rowsWritten += entry.rowsWritten || 0;
-                existing.storageMB += entry.storageMB || 0;
-              } else {
-                timeSeriesMap.set(entry.month, {
-                  month: entry.month,
-                  timestamp: entry.timestamp,
-                  rowsRead: entry.rowsRead || 0,
-                  rowsWritten: entry.rowsWritten || 0,
-                  storageMB: entry.storageMB || 0,
-                });
-              }
-            });
-          }
-        });
-
-        const mergedTimeSeries = Array.from(timeSeriesMap.values())
-          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
-        d1Data = {
-          enabled: true,
-          rowsReadThreshold: d1Config.rowsReadThreshold,
-          rowsWrittenThreshold: d1Config.rowsWrittenThreshold,
-          storageThreshold: d1Config.storageThreshold,
-          current: {
-            rowsRead: successfulD1Results.reduce((sum, entry) => sum + (entry.data.current?.rowsRead || 0), 0),
-            rowsWritten: successfulD1Results.reduce((sum, entry) => sum + (entry.data.current?.rowsWritten || 0), 0),
-            storageMB: successfulD1Results.reduce((sum, entry) => sum + (entry.data.current?.storageMB || 0), 0),
-          },
-          previous: {
-            rowsRead: successfulD1Results.reduce((sum, entry) => sum + (entry.data.previous?.rowsRead || 0), 0),
-            rowsWritten: successfulD1Results.reduce((sum, entry) => sum + (entry.data.previous?.rowsWritten || 0), 0),
-            storageMB: successfulD1Results.reduce((sum, entry) => sum + (entry.data.previous?.storageMB || 0), 0),
-          },
-          timeSeries: mergedTimeSeries,
-          perAccountData: successfulD1Results.map(entry => ({
-            accountId: entry.accountId,
-            current: entry.data.current,
-            previous: entry.data.previous,
-            timeSeries: entry.data.timeSeries,
-          })),
-        };
-        console.log(`D1: ${d1Data.current.rowsRead.toLocaleString()} rows read, ${d1Data.current.rowsWritten.toLocaleString()} rows written, ${d1Data.current.storageMB.toFixed(2)} MB`);
-      }
-      timings.d1 = Date.now() - d1Start;
-      console.log(`⏱️ D1: ${timings.d1}ms`);
-    } else {
-      console.log('⏭️ D1 disabled - skipping fetch');
-    }
-
-    // Fetch KV if enabled
-    let kvData = null;
-    const kvAccountIds = config?.developerServices?.kv?.accountIds || [];
-    if (config?.developerServices?.kv?.enabled && kvAccountIds.length > 0) {
-      const kvStart = Date.now();
-      console.log(`🔑 Fetching KV for ${kvAccountIds.length} account(s)...`);
-      const kvConfig = config.developerServices.kv;
-
-      const kvResults = await Promise.allSettled(
-        kvAccountIds.map(accountId =>
-          fetchKVForAccount(apiKey, accountId, kvConfig, env)
-            .then(data => ({ accountId, data }))
-        )
-      );
-
-      const successfulKV = kvResults
-        .filter(r => r.status === 'fulfilled' && r.value.data)
-        .map(r => r.value);
-
-      if (successfulKV.length > 0) {
-        const timeSeriesMap = new Map();
-        successfulKV.forEach(entry => {
-          entry.data.timeSeries.forEach(ts => {
-            const existing = timeSeriesMap.get(ts.month) || { month: ts.month, timestamp: ts.timestamp, reads: 0, writes: 0, deletes: 0, lists: 0, storageMB: 0 };
-            existing.reads += ts.reads || 0;
-            existing.writes += ts.writes || 0;
-            existing.deletes += ts.deletes || 0;
-            existing.lists += ts.lists || 0;
-            existing.storageMB += ts.storageMB || 0;
-            timeSeriesMap.set(ts.month, existing);
-          });
-        });
-        const mergedTimeSeries = Array.from(timeSeriesMap.values())
-          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
-        kvData = {
-          enabled: true,
-          readsThreshold: kvConfig.readsThreshold,
-          writesThreshold: kvConfig.writesThreshold,
-          deletesThreshold: kvConfig.deletesThreshold,
-          listsThreshold: kvConfig.listsThreshold,
-          storageThreshold: kvConfig.storageThreshold,
-          current: {
-            reads: successfulKV.reduce((sum, e) => sum + (e.data.current.reads || 0), 0),
-            writes: successfulKV.reduce((sum, e) => sum + (e.data.current.writes || 0), 0),
-            deletes: successfulKV.reduce((sum, e) => sum + (e.data.current.deletes || 0), 0),
-            lists: successfulKV.reduce((sum, e) => sum + (e.data.current.lists || 0), 0),
-            storageMB: successfulKV.reduce((sum, e) => sum + (e.data.current.storageMB || 0), 0),
-          },
-          previous: {
-            reads: successfulKV.reduce((sum, e) => sum + (e.data.previous.reads || 0), 0),
-            writes: successfulKV.reduce((sum, e) => sum + (e.data.previous.writes || 0), 0),
-            deletes: successfulKV.reduce((sum, e) => sum + (e.data.previous.deletes || 0), 0),
-            lists: successfulKV.reduce((sum, e) => sum + (e.data.previous.lists || 0), 0),
-            storageMB: successfulKV.reduce((sum, e) => sum + (e.data.previous.storageMB || 0), 0),
-          },
-          timeSeries: mergedTimeSeries,
-          perAccountData: successfulKV.map(entry => ({
-            accountId: entry.accountId,
-            current: entry.data.current,
-            previous: entry.data.previous,
-            timeSeries: entry.data.timeSeries,
-          })),
-        };
-        console.log(`KV: ${kvData.current.reads.toLocaleString()} reads, ${kvData.current.writes.toLocaleString()} writes, ${kvData.current.storageMB.toFixed(2)} MB`);
-      }
-      timings.kv = Date.now() - kvStart;
-      console.log(`⏱️ KV: ${timings.kv}ms`);
-    } else {
-      console.log('⏭️ KV disabled - skipping fetch');
-    }
-
-    // Fetch Stream if enabled
-    let streamData = null;
-    const streamAccountIds = config?.developerServices?.stream?.accountIds || [];
-    if (config?.developerServices?.stream?.enabled && streamAccountIds.length > 0) {
-      const streamStart = Date.now();
-      console.log(`🎬 Fetching Stream for ${streamAccountIds.length} account(s)...`);
-      const streamConfig = config.developerServices.stream;
-
-      const streamResults = await Promise.allSettled(
-        streamAccountIds.map(accountId =>
-          fetchStreamForAccount(apiKey, accountId, streamConfig, env)
-            .then(data => ({ accountId, data }))
-        )
-      );
-
-      const successfulStream = streamResults
-        .filter(r => r.status === 'fulfilled' && r.value.data)
-        .map(r => r.value);
-
-      if (successfulStream.length > 0) {
-        const timeSeriesMap = new Map();
-        successfulStream.forEach(entry => {
-          entry.data.timeSeries.forEach(ts => {
-            const existing = timeSeriesMap.get(ts.month) || { month: ts.month, timestamp: ts.timestamp, minutesStored: 0, minutesDelivered: 0 };
-            existing.minutesStored += ts.minutesStored || 0;
-            existing.minutesDelivered += ts.minutesDelivered || 0;
-            timeSeriesMap.set(ts.month, existing);
-          });
-        });
-        const mergedTimeSeries = Array.from(timeSeriesMap.values())
-          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
-        streamData = {
-          enabled: true,
-          minutesStoredThreshold: streamConfig.minutesStoredThreshold,
-          minutesDeliveredThreshold: streamConfig.minutesDeliveredThreshold,
-          current: {
-            minutesStored: successfulStream.reduce((sum, e) => sum + (e.data.current.minutesStored || 0), 0),
-            minutesDelivered: successfulStream.reduce((sum, e) => sum + (e.data.current.minutesDelivered || 0), 0),
-          },
-          previous: {
-            minutesStored: successfulStream.reduce((sum, e) => sum + (e.data.previous.minutesStored || 0), 0),
-            minutesDelivered: successfulStream.reduce((sum, e) => sum + (e.data.previous.minutesDelivered || 0), 0),
-          },
-          timeSeries: mergedTimeSeries,
-          perAccountData: successfulStream.map(entry => ({
-            accountId: entry.accountId,
-            current: entry.data.current,
-            previous: entry.data.previous,
-            timeSeries: entry.data.timeSeries,
-          })),
-        };
-        console.log(`Stream: ${streamData.current.minutesStored.toLocaleString()} min stored, ${streamData.current.minutesDelivered.toLocaleString()} min delivered`);
-      }
-      timings.stream = Date.now() - streamStart;
-      console.log(`⏱️ Stream: ${timings.stream}ms`);
-    } else {
-      console.log('⏭️ Stream disabled - skipping fetch');
-    }
-
-    // Fetch Images if enabled
-    let imagesData = null;
-    const imagesAccountIds = config?.developerServices?.images?.accountIds || [];
-    if (config?.developerServices?.images?.enabled && imagesAccountIds.length > 0) {
-      const imagesStart = Date.now();
-      console.log(`🖼️ Fetching Images for ${imagesAccountIds.length} account(s)...`);
-      const imagesConfig = config.developerServices.images;
-
-      const imagesResults = await Promise.allSettled(
-        imagesAccountIds.map(accountId =>
-          fetchImagesForAccount(apiKey, accountId, imagesConfig, env)
-            .then(data => ({ accountId, data }))
-        )
-      );
-
-      const successfulImages = imagesResults
-        .filter(r => r.status === 'fulfilled' && r.value.data)
-        .map(r => r.value);
-
-      if (successfulImages.length > 0) {
-        const timeSeriesMap = new Map();
-        successfulImages.forEach(entry => {
-          entry.data.timeSeries.forEach(ts => {
-            const existing = timeSeriesMap.get(ts.month) || { month: ts.month, timestamp: ts.timestamp, imagesStored: 0, imagesDelivered: 0 };
-            existing.imagesStored += ts.imagesStored || 0;
-            existing.imagesDelivered += ts.imagesDelivered || 0;
-            timeSeriesMap.set(ts.month, existing);
-          });
-        });
-        const mergedTimeSeries = Array.from(timeSeriesMap.values())
-          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
-        imagesData = {
-          enabled: true,
-          imagesStoredThreshold: imagesConfig.imagesStoredThreshold,
-          imagesDeliveredThreshold: imagesConfig.imagesDeliveredThreshold,
-          current: {
-            imagesStored: successfulImages.reduce((sum, e) => sum + (e.data.current.imagesStored || 0), 0),
-            imagesDelivered: successfulImages.reduce((sum, e) => sum + (e.data.current.imagesDelivered || 0), 0),
-          },
-          previous: {
-            imagesStored: successfulImages.reduce((sum, e) => sum + (e.data.previous.imagesStored || 0), 0),
-            imagesDelivered: successfulImages.reduce((sum, e) => sum + (e.data.previous.imagesDelivered || 0), 0),
-          },
-          timeSeries: mergedTimeSeries,
-          perAccountData: successfulImages.map(entry => ({
-            accountId: entry.accountId,
-            current: entry.data.current,
-            previous: entry.data.previous,
-            timeSeries: entry.data.timeSeries,
-          })),
-        };
-        console.log(`Images: ${imagesData.current.imagesStored.toLocaleString()} stored, ${imagesData.current.imagesDelivered.toLocaleString()} delivered`);
-      }
-      timings.images = Date.now() - imagesStart;
-      console.log(`⏱️ Images: ${timings.images}ms`);
-    } else {
-      console.log('⏭️ Images disabled - skipping fetch');
-    }
-
-    // Fetch Workers AI if enabled
-    let workersAIData = null;
-    const waiAccountIds = config?.developerServices?.workersAI?.accountIds || [];
-    if (config?.developerServices?.workersAI?.enabled && waiAccountIds.length > 0) {
-      const waiStart = Date.now();
-      console.log(`🧠 Fetching Workers AI for ${waiAccountIds.length} account(s)...`);
-      const waiConfig = config.developerServices.workersAI;
-
-      const waiResults = await Promise.allSettled(
-        waiAccountIds.map(accountId =>
-          fetchWorkersAIForAccount(apiKey, accountId, waiConfig, env)
-            .then(data => ({ accountId, data }))
-        )
-      );
-
-      const successfulWAI = waiResults
-        .filter(r => r.status === 'fulfilled' && r.value.data)
-        .map(r => r.value);
-
-      if (successfulWAI.length > 0) {
-        const timeSeriesMap = new Map();
-        successfulWAI.forEach(entry => {
-          entry.data.timeSeries.forEach(ts => {
-            const existing = timeSeriesMap.get(ts.month) || { month: ts.month, timestamp: ts.timestamp, neurons: 0 };
-            existing.neurons += ts.neurons || 0;
-            timeSeriesMap.set(ts.month, existing);
-          });
-        });
-        const mergedTimeSeries = Array.from(timeSeriesMap.values())
-          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
-        workersAIData = {
-          enabled: true,
-          neuronsThreshold: waiConfig.neuronsThreshold,
-          current: {
-            neurons: successfulWAI.reduce((sum, e) => sum + (e.data.current.neurons || 0), 0),
-          },
-          previous: {
-            neurons: successfulWAI.reduce((sum, e) => sum + (e.data.previous.neurons || 0), 0),
-          },
-          timeSeries: mergedTimeSeries,
-          perAccountData: successfulWAI.map(entry => ({
-            accountId: entry.accountId,
-            current: entry.data.current,
-            previous: entry.data.previous,
-            timeSeries: entry.data.timeSeries,
-          })),
-        };
-        console.log(`Workers AI: ${workersAIData.current.neurons.toLocaleString()} neurons`);
-      }
-      timings.workersAI = Date.now() - waiStart;
-      console.log(`⏱️ Workers AI: ${timings.workersAI}ms`);
-    } else {
-      console.log('⏭️ Workers AI disabled - skipping fetch');
-    }
-
-    // Fetch Queues if enabled
-    let queuesData = null;
-    const queuesAccountIds = config?.developerServices?.queues?.accountIds || [];
-    if (config?.developerServices?.queues?.enabled && queuesAccountIds.length > 0) {
-      const queuesStart = Date.now();
-      console.log(`📨 Fetching Queues for ${queuesAccountIds.length} account(s)...`);
-      const queuesConfig = config.developerServices.queues;
-
-      const queuesResults = await Promise.allSettled(
-        queuesAccountIds.map(accountId =>
-          fetchQueuesForAccount(apiKey, accountId, queuesConfig, env)
-            .then(data => ({ accountId, data }))
-        )
-      );
-
-      const successfulQueues = queuesResults
-        .filter(r => r.status === 'fulfilled' && r.value.data)
-        .map(r => r.value);
-
-      if (successfulQueues.length > 0) {
-        const timeSeriesMap = new Map();
-        successfulQueues.forEach(entry => {
-          entry.data.timeSeries.forEach(ts => {
-            const existing = timeSeriesMap.get(ts.month) || { month: ts.month, timestamp: ts.timestamp, operations: 0 };
-            existing.operations += ts.operations || 0;
-            timeSeriesMap.set(ts.month, existing);
-          });
-        });
-        const mergedTimeSeries = Array.from(timeSeriesMap.values())
-          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
-        queuesData = {
-          enabled: true,
-          operationsThreshold: queuesConfig.operationsThreshold,
-          current: {
-            operations: successfulQueues.reduce((sum, e) => sum + (e.data.current.operations || 0), 0),
-          },
-          previous: {
-            operations: successfulQueues.reduce((sum, e) => sum + (e.data.previous.operations || 0), 0),
-          },
-          timeSeries: mergedTimeSeries,
-          perAccountData: successfulQueues.map(entry => ({
-            accountId: entry.accountId,
-            current: entry.data.current,
-            previous: entry.data.previous,
-            timeSeries: entry.data.timeSeries,
-          })),
-        };
-        console.log(`Queues: ${queuesData.current.operations.toLocaleString()} operations`);
-      }
-      timings.queues = Date.now() - queuesStart;
-      console.log(`⏱️ Queues: ${timings.queues}ms`);
-    } else {
-      console.log('⏭️ Queues disabled - skipping fetch');
-    }
-
-    // Fetch Workers Logs & Traces if enabled
-    let workersLogsTracesData = null;
-    const wltAccountIds = config?.developerServices?.workersLogsTraces?.accountIds || [];
-    if (config?.developerServices?.workersLogsTraces?.enabled && wltAccountIds.length > 0) {
-      const wltStart = Date.now();
-      console.log(`📋 Fetching Workers Logs & Traces for ${wltAccountIds.length} account(s)...`);
-      const wltConfig = config.developerServices.workersLogsTraces;
-
-      const wltResults = await Promise.allSettled(
-        wltAccountIds.map(accountId =>
-          fetchWorkersLogsTracesForAccount(apiKey, accountId, wltConfig, env)
-            .then(data => ({ accountId, data }))
-        )
-      );
-
-      const successfulWLT = wltResults
-        .filter(r => r.status === 'fulfilled' && r.value.data)
-        .map(r => r.value);
-
-      if (successfulWLT.length > 0) {
-        const timeSeriesMap = new Map();
-        successfulWLT.forEach(entry => {
-          entry.data.timeSeries.forEach(ts => {
-            const existing = timeSeriesMap.get(ts.month) || { month: ts.month, timestamp: ts.timestamp, events: 0 };
-            existing.events += ts.events || 0;
-            timeSeriesMap.set(ts.month, existing);
-          });
-        });
-        const mergedTimeSeries = Array.from(timeSeriesMap.values())
-          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
-        workersLogsTracesData = {
-          enabled: true,
-          eventsThreshold: wltConfig.eventsThreshold,
-          current: {
-            events: successfulWLT.reduce((sum, e) => sum + (e.data.current.events || 0), 0),
-          },
-          previous: {
-            events: successfulWLT.reduce((sum, e) => sum + (e.data.previous.events || 0), 0),
-          },
-          timeSeries: mergedTimeSeries,
-          perAccountData: successfulWLT.map(entry => ({
-            accountId: entry.accountId,
-            current: entry.data.current,
-            previous: entry.data.previous,
-            timeSeries: entry.data.timeSeries,
-          })),
-        };
-        console.log(`Workers Logs & Traces: ${workersLogsTracesData.current.events.toLocaleString()} events`);
-      }
-      timings.workersLogsTraces = Date.now() - wltStart;
-      console.log(`⏱️ Workers Logs & Traces: ${timings.workersLogsTraces}ms`);
-    } else {
-      console.log('⏭️ Workers Logs & Traces disabled - skipping fetch');
-    }
-
-    // Fetch Spectrum if enabled
-    let spectrumData = null;
-    const spectrumZones = config?.networkServices?.spectrum?.zones || [];
-    if (config?.networkServices?.spectrum?.enabled && spectrumZones.length > 0) {
-      const specStart = Date.now();
-      console.log(`📡 Fetching Spectrum for ${spectrumZones.length} zone(s)...`);
-      const specConfig = config.networkServices.spectrum;
-
-      const specResults = await Promise.allSettled(
-        spectrumZones.map(zoneId =>
-          fetchSpectrumForZone(apiKey, zoneId, specConfig, env)
-            .then(data => ({ zoneId, data }))
-        )
-      );
-
-      const successfulSpec = specResults
-        .filter(r => r.status === 'fulfilled' && r.value.data)
-        .map(r => r.value);
-
-      if (successfulSpec.length > 0) {
-        const timeSeriesMap = new Map();
-        successfulSpec.forEach(entry => {
-          entry.data.timeSeries.forEach(ts => {
-            const existing = timeSeriesMap.get(ts.month) || { month: ts.month, timestamp: ts.timestamp, dataTransfer: 0, p99Concurrent: 0 };
-            existing.dataTransfer += ts.dataTransfer || 0;
-            existing.p99Concurrent = Math.max(existing.p99Concurrent, ts.p99Concurrent || 0);
-            timeSeriesMap.set(ts.month, existing);
-          });
-        });
-        const mergedTimeSeries = Array.from(timeSeriesMap.values())
-          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
-        spectrumData = {
-          enabled: true,
-          dataTransferThreshold: specConfig.dataTransferThreshold,
-          connectionsThreshold: specConfig.connectionsThreshold,
-          current: {
-            dataTransfer: successfulSpec.reduce((sum, e) => sum + (e.data.current.dataTransfer || 0), 0),
-            p99Concurrent: Math.max(...successfulSpec.map(e => e.data.current.p99Concurrent || 0)),
-          },
-          previous: {
-            dataTransfer: successfulSpec.reduce((sum, e) => sum + (e.data.previous.dataTransfer || 0), 0),
-            p99Concurrent: Math.max(...successfulSpec.map(e => e.data.previous.p99Concurrent || 0)),
-          },
-          timeSeries: mergedTimeSeries,
-          perZoneData: successfulSpec.map(entry => ({
-            zoneId: entry.zoneId,
-            current: entry.data.current,
-            previous: entry.data.previous,
-            timeSeries: entry.data.timeSeries,
-          })),
-        };
-        console.log(`Spectrum: ${(spectrumData.current.dataTransfer / (1024*1024*1024)).toFixed(2)} GB transfer, P99 concurrent: ${spectrumData.current.p99Concurrent}`);
-      }
-      timings.spectrum = Date.now() - specStart;
-      console.log(`⏱️ Spectrum: ${timings.spectrum}ms`);
-    } else {
-      console.log('⏭️ Spectrum disabled - skipping fetch');
-    }
-
-    // Fetch Cache Reserve if enabled
-    let cacheReserveData = null;
-    const cacheReserveZones = config?.applicationServices?.cacheReserve?.zones || [];
-    if (config?.applicationServices?.cacheReserve?.enabled && cacheReserveZones.length > 0) {
-      const crStart = Date.now();
-      console.log(`📦 Fetching Cache Reserve for ${cacheReserveZones.length} zone(s)...`);
-      const crConfig = config.applicationServices.cacheReserve;
-
-      try {
-        const zoneNameMap = {};
-        successfulMetrics.forEach(acct => {
-          (acct.zoneBreakdown?.zones || []).forEach(z => {
-            if (z.zoneTag && z.zoneName) zoneNameMap[z.zoneTag] = z.zoneName;
-          });
-        });
-
-        const crResults = await Promise.allSettled(
-          cacheReserveZones.map(zoneId =>
-            fetchCacheReserveForZone(apiKey, zoneId, zoneNameMap[zoneId] || zoneId, env)
-          )
-        );
-
-        const successfulCR = crResults
-          .filter(r => r.status === 'fulfilled' && r.value)
-          .map(r => r.value);
-
-        if (successfulCR.length > 0) {
-          const timeSeriesMap = new Map();
-          successfulCR.forEach(entry => {
-            entry.timeSeries.forEach(ts => {
-              const existing = timeSeriesMap.get(ts.month) || { month: ts.month, timestamp: ts.timestamp, storageGBDays: 0, classAOps: 0, classBOps: 0 };
-              existing.storageGBDays += ts.storageGBDays || 0;
-              existing.classAOps += ts.classAOps || 0;
-              existing.classBOps += ts.classBOps || 0;
-              timeSeriesMap.set(ts.month, existing);
-            });
-          });
-          const mergedTimeSeries = Array.from(timeSeriesMap.values())
-            .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
-          const sumField = (field) => successfulCR.reduce((sum, e) => sum + (e.current[field] || 0), 0);
-          const sumPrevField = (field) => successfulCR.reduce((sum, e) => sum + (e.previous[field] || 0), 0);
-
-          cacheReserveData = {
-            enabled: true,
-            storageThreshold: crConfig.storageThreshold,
-            classAOpsThreshold: crConfig.classAOpsThreshold,
-            classBOpsThreshold: crConfig.classBOpsThreshold,
-            current: {
-              storageGBDays: sumField('storageGBDays'),
-              classAOps: sumField('classAOps'),
-              classBOps: sumField('classBOps'),
-              zones: successfulCR.map(e => ({ zoneId: e.zoneId, zoneName: e.zoneName, storageGBDays: e.current.storageGBDays, classAOps: e.current.classAOps, classBOps: e.current.classBOps })),
-            },
-            previous: {
-              storageGBDays: sumPrevField('storageGBDays'),
-              classAOps: sumPrevField('classAOps'),
-              classBOps: sumPrevField('classBOps'),
-              zones: successfulCR.map(e => ({ zoneId: e.zoneId, zoneName: e.zoneName, storageGBDays: e.previous.storageGBDays, classAOps: e.previous.classAOps, classBOps: e.previous.classBOps })),
-            },
-            timeSeries: mergedTimeSeries,
-            perZoneData: successfulCR.map(entry => ({
-              zoneId: entry.zoneId,
-              zoneName: entry.zoneName,
-              current: entry.current,
-              previous: entry.previous,
-              timeSeries: entry.timeSeries,
-            })),
-          };
-          console.log(`Cache Reserve: storage=${cacheReserveData.current.storageGBDays.toFixed(4)} GB-days, classA=${cacheReserveData.current.classAOps}, classB=${cacheReserveData.current.classBOps}`);
-        }
-      } catch (crError) {
-        console.error('Cache Reserve fetch failed (non-fatal):', crError.message || crError);
-      }
-      timings.cacheReserve = Date.now() - crStart;
-      console.log(`⏱️ Cache Reserve: ${timings.cacheReserve}ms`);
-    } else {
-      console.log('⏭️ Cache Reserve disabled - skipping fetch');
-    }
-
-    // Fetch Load Balancing if enabled
-    let loadBalancingData = null;
-    const lbAccountIds = config?.applicationServices?.loadBalancing?.accountIds || [];
-    if (config?.applicationServices?.loadBalancing?.enabled && lbAccountIds.length > 0) {
-      const lbStart = Date.now();
-      console.log(`⚖️ Fetching Load Balancing for ${lbAccountIds.length} account(s)...`);
-      const lbConfig = config.applicationServices.loadBalancing;
-
-      const lbPromises = lbAccountIds.map(accountId =>
-        fetchLoadBalancingForAccount(apiKey, accountId, env)
-          .then(data => ({ accountId, data }))
-      );
-
-      const lbResults = await Promise.allSettled(lbPromises);
-      const lbData = lbResults
-        .filter(r => r.status === 'fulfilled' && r.value?.data)
-        .map(r => r.value);
-
-      if (lbData.length > 0) {
-        const timeSeriesMap = new Map();
-        lbData.forEach(entry => {
-          if (entry.data.timeSeries) {
-            entry.data.timeSeries.forEach(ts => {
-              const existing = timeSeriesMap.get(ts.month);
-              if (existing) {
-                existing.endpoints += ts.endpoints || 0;
-              } else {
-                timeSeriesMap.set(ts.month, { month: ts.month, timestamp: ts.timestamp, endpoints: ts.endpoints || 0 });
-              }
-            });
-          }
-        });
-        const mergedTimeSeries = Array.from(timeSeriesMap.values())
-          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
-        loadBalancingData = {
-          enabled: true,
-          threshold: lbConfig.threshold,
-          current: {
-            endpoints: lbData.reduce((sum, entry) => sum + entry.data.current.endpoints, 0),
-          },
-          previous: {
-            endpoints: lbData.reduce((sum, entry) => sum + entry.data.previous.endpoints, 0),
-          },
-          timeSeries: mergedTimeSeries,
-          perAccountData: lbData.map(entry => ({
-            accountId: entry.accountId,
-            current: entry.data.current,
-            previous: entry.data.previous,
-            timeSeries: entry.data.timeSeries,
-          })),
-        };
-        console.log(`Load Balancing: ${loadBalancingData.current.endpoints} endpoints`);
-      }
-      timings.loadBalancing = Date.now() - lbStart;
-      console.log(`⏱️ Load Balancing: ${timings.loadBalancing}ms`);
-    } else {
-      console.log('⏭️ Load Balancing disabled - skipping fetch');
-    }
-
-    // Fetch Custom Hostnames if enabled
-    let customHostnamesData = null;
-    const chAccountIds = config?.applicationServices?.customHostnames?.accountIds || [];
-    if (config?.applicationServices?.customHostnames?.enabled && chAccountIds.length > 0) {
-      const chStart = Date.now();
-      console.log(`🏷️ Fetching Custom Hostnames for ${chAccountIds.length} account(s)...`);
-      const chConfig = config.applicationServices.customHostnames;
-
-      const chPromises = chAccountIds.map(accountId =>
-        fetchCustomHostnamesForAccount(apiKey, accountId, env)
-          .then(data => ({ accountId, data }))
-      );
-
-      const chResults = await Promise.allSettled(chPromises);
-      const chData = chResults
-        .filter(r => r.status === 'fulfilled' && r.value?.data)
-        .map(r => r.value);
-
-      if (chData.length > 0) {
-        const timeSeriesMap = new Map();
-        chData.forEach(entry => {
-          if (entry.data.timeSeries) {
-            entry.data.timeSeries.forEach(ts => {
-              const existing = timeSeriesMap.get(ts.month);
-              if (existing) {
-                existing.hostnames += ts.hostnames || 0;
-              } else {
-                timeSeriesMap.set(ts.month, { month: ts.month, timestamp: ts.timestamp, hostnames: ts.hostnames || 0 });
-              }
-            });
-          }
-        });
-        const mergedTimeSeries = Array.from(timeSeriesMap.values())
-          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
-        customHostnamesData = {
-          enabled: true,
-          threshold: chConfig.threshold,
-          current: {
-            hostnames: chData.reduce((sum, entry) => sum + entry.data.current.hostnames, 0),
-          },
-          previous: {
-            hostnames: chData.reduce((sum, entry) => sum + entry.data.previous.hostnames, 0),
-          },
-          timeSeries: mergedTimeSeries,
-          perAccountData: chData.map(entry => ({
-            accountId: entry.accountId,
-            current: entry.data.current,
-            previous: entry.data.previous,
-            timeSeries: entry.data.timeSeries,
-          })),
-        };
-        console.log(`Custom Hostnames: ${customHostnamesData.current.hostnames} hostnames`);
-      }
-      timings.customHostnames = Date.now() - chStart;
-      console.log(`⏱️ Custom Hostnames: ${timings.customHostnames}ms`);
-    } else {
-      console.log('⏭️ Custom Hostnames disabled - skipping fetch');
-    }
-
-    // Fetch Log Explorer if enabled
-    let logExplorerData = null;
-    const leAccountIds = config?.applicationServices?.logExplorer?.accountIds || [];
-    if (config?.applicationServices?.logExplorer?.enabled && leAccountIds.length > 0) {
-      const leStart = Date.now();
-      console.log(`📋 Fetching Log Explorer for ${leAccountIds.length} account(s)...`);
-      const leConfig = config.applicationServices.logExplorer;
-
-      const lePromises = leAccountIds.map(accountId =>
-        fetchLogExplorerForAccount(apiKey, accountId, env)
-          .then(data => ({ accountId, data }))
-      );
-
-      const leResults = await Promise.allSettled(lePromises);
-      const leData = leResults
-        .filter(r => r.status === 'fulfilled' && r.value?.data)
-        .map(r => r.value);
-
-      if (leData.length > 0) {
-        const timeSeriesMap = new Map();
-        leData.forEach(entry => {
-          if (entry.data.timeSeries) {
-            entry.data.timeSeries.forEach(ts => {
-              const existing = timeSeriesMap.get(ts.month);
-              if (existing) {
-                existing.billableGB += ts.billableGB || 0;
-              } else {
-                timeSeriesMap.set(ts.month, { month: ts.month, timestamp: ts.timestamp, billableGB: ts.billableGB || 0 });
-              }
-            });
-          }
-        });
-        const mergedTimeSeries = Array.from(timeSeriesMap.values())
-          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
-        logExplorerData = {
-          enabled: true,
-          threshold: leConfig.threshold,
-          current: {
-            billableGB: leData.reduce((sum, entry) => sum + entry.data.current.billableGB, 0),
-          },
-          previous: {
-            billableGB: leData.reduce((sum, entry) => sum + entry.data.previous.billableGB, 0),
-          },
-          timeSeries: mergedTimeSeries,
-          perAccountData: leData.map(entry => ({
-            accountId: entry.accountId,
-            current: entry.data.current,
-            previous: entry.data.previous,
-            timeSeries: entry.data.timeSeries,
-          })),
-        };
-        console.log(`Log Explorer: ${logExplorerData.current.billableGB.toFixed(2)} GB`);
-      }
-      timings.logExplorer = Date.now() - leStart;
-      console.log(`⏱️ Log Explorer: ${timings.logExplorer}ms`);
-    } else {
-      console.log('⏭️ Log Explorer disabled - skipping fetch');
-    }
-
-    // Fetch Durable Objects if enabled
-    let durableObjectsData = null;
-    const doAccountIds = config?.developerServices?.durableObjects?.accountIds || [];
-    if (config?.developerServices?.durableObjects?.enabled && doAccountIds.length > 0) {
-      const doStart = Date.now();
-      console.log(`🏗️ Fetching Durable Objects for ${doAccountIds.length} account(s)...`);
-      const doConfig = config.developerServices.durableObjects;
-
-      const doResults = await Promise.allSettled(
-        doAccountIds.map(accountId =>
-          fetchDurableObjectsForAccount(apiKey, accountId, doConfig, env)
-            .then(data => ({ accountId, data }))
-        )
-      );
-
-      const successfulDO = doResults
-        .filter(r => r.status === 'fulfilled' && r.value.data)
-        .map(r => r.value);
-
-      if (successfulDO.length > 0) {
-        const timeSeriesMap = new Map();
-        successfulDO.forEach(entry => {
-          entry.data.timeSeries.forEach(ts => {
-            const existing = timeSeriesMap.get(ts.month) || { month: ts.month, timestamp: ts.timestamp, requests: 0, durationGBs: 0, sqliteRowsRead: 0, sqliteRowsWritten: 0, kvReadUnits: 0, kvWriteUnits: 0, kvDeletes: 0, storageMB: 0 };
-            existing.requests += ts.requests || 0;
-            existing.durationGBs += ts.durationGBs || 0;
-            existing.sqliteRowsRead += ts.sqliteRowsRead || 0;
-            existing.sqliteRowsWritten += ts.sqliteRowsWritten || 0;
-            existing.kvReadUnits += ts.kvReadUnits || 0;
-            existing.kvWriteUnits += ts.kvWriteUnits || 0;
-            existing.kvDeletes += ts.kvDeletes || 0;
-            existing.storageMB += ts.storageMB || 0;
-            timeSeriesMap.set(ts.month, existing);
-          });
-        });
-        const mergedTimeSeries = Array.from(timeSeriesMap.values())
-          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
-        const sumField = (field) => successfulDO.reduce((sum, e) => sum + (e.data.current[field] || 0), 0);
-        const sumPrevField = (field) => successfulDO.reduce((sum, e) => sum + (e.data.previous[field] || 0), 0);
-
-        durableObjectsData = {
-          enabled: true,
-          requestsThreshold: doConfig.requestsThreshold,
-          durationThreshold: doConfig.durationThreshold,
-          sqliteRowsReadThreshold: doConfig.sqliteRowsReadThreshold,
-          sqliteRowsWrittenThreshold: doConfig.sqliteRowsWrittenThreshold,
-          kvReadUnitsThreshold: doConfig.kvReadUnitsThreshold,
-          kvWriteUnitsThreshold: doConfig.kvWriteUnitsThreshold,
-          kvDeletesThreshold: doConfig.kvDeletesThreshold,
-          storageThreshold: doConfig.storageThreshold,
-          current: {
-            requests: sumField('requests'), durationGBs: sumField('durationGBs'),
-            sqliteRowsRead: sumField('sqliteRowsRead'), sqliteRowsWritten: sumField('sqliteRowsWritten'),
-            kvReadUnits: sumField('kvReadUnits'), kvWriteUnits: sumField('kvWriteUnits'),
-            kvDeletes: sumField('kvDeletes'), storageMB: sumField('storageMB'),
-          },
-          previous: {
-            requests: sumPrevField('requests'), durationGBs: sumPrevField('durationGBs'),
-            sqliteRowsRead: sumPrevField('sqliteRowsRead'), sqliteRowsWritten: sumPrevField('sqliteRowsWritten'),
-            kvReadUnits: sumPrevField('kvReadUnits'), kvWriteUnits: sumPrevField('kvWriteUnits'),
-            kvDeletes: sumPrevField('kvDeletes'), storageMB: sumPrevField('storageMB'),
-          },
-          timeSeries: mergedTimeSeries,
-          perAccountData: successfulDO.map(entry => ({
-            accountId: entry.accountId,
-            current: entry.data.current,
-            previous: entry.data.previous,
-            timeSeries: entry.data.timeSeries,
-          })),
-        };
-        console.log(`DO: ${durableObjectsData.current.requests.toLocaleString()} requests, ${durableObjectsData.current.durationGBs.toFixed(2)} GB-s`);
-      }
-      timings.durableObjects = Date.now() - doStart;
-      console.log(`⏱️ Durable Objects: ${timings.durableObjects}ms`);
-    } else {
-      console.log('⏭️ Durable Objects disabled - skipping fetch');
-    }
-    
-    // Fetch Magic Transit and Magic WAN in PARALLEL for performance
-    let magicTransitData = null;
-    let magicWanData = null;
-    console.log('Network Services config:', JSON.stringify(config?.networkServices));
-    const mtAccountIds = config?.networkServices?.magicTransit?.accountIds || [];
-    const mwAccountIds = config?.networkServices?.magicWan?.accountIds || [];
-    const mtEnabled = config?.networkServices?.magicTransit?.enabled && mtAccountIds.length > 0;
-    const mwEnabled = config?.networkServices?.magicWan?.enabled && mwAccountIds.length > 0;
-    
-    if (mtEnabled || mwEnabled) {
-      const magicStart = Date.now();
-      console.log(`🌐 Fetching Magic Transit/WAN in parallel...`);
-      
-      const magicPromises = [];
-      
-      if (mtEnabled) {
-        const mtConfig = config.networkServices.magicTransit;
-        const mtPromise = Promise.allSettled(
-          mtAccountIds.map(accountId =>
-            fetchMagicBandwidthForAccount(apiKey, accountId, mtConfig, env, 'magicTransit')
-              .then(data => ({ accountId, data }))
-          )
-        ).then(results => ({
-          type: 'magicTransit',
-          config: mtConfig,
-          data: results.filter(r => r.status === 'fulfilled' && r.value?.data).map(r => r.value)
-        }));
-        magicPromises.push(mtPromise);
-      }
-      
-      if (mwEnabled) {
-        const mwConfig = config.networkServices.magicWan;
-        const mwPromise = Promise.allSettled(
-          mwAccountIds.map(accountId =>
-            fetchMagicBandwidthForAccount(apiKey, accountId, mwConfig, env, 'magicWan')
-              .then(data => ({ accountId, data }))
-          )
-        ).then(results => ({
-          type: 'magicWan',
-          config: mwConfig,
-          data: results.filter(r => r.status === 'fulfilled' && r.value?.data).map(r => r.value)
-        }));
-        magicPromises.push(mwPromise);
-      }
-      
-      const magicResults = await Promise.all(magicPromises);
-      
-      for (const result of magicResults) {
-        if (result.data.length > 0) {
-          const timeSeriesMap = new Map();
-          result.data.forEach(accountEntry => {
-            if (accountEntry.data.timeSeries) {
-              accountEntry.data.timeSeries.forEach(entry => {
-                const existing = timeSeriesMap.get(entry.month);
-                if (existing) {
-                  existing.p95Mbps += entry.p95Mbps || 0;
-                  existing.ingressP95Mbps += entry.ingressP95Mbps || 0;
-                  existing.egressP95Mbps += entry.egressP95Mbps || 0;
-                } else {
-                  timeSeriesMap.set(entry.month, {
-                    month: entry.month,
-                    timestamp: entry.timestamp,
-                    p95Mbps: entry.p95Mbps || 0,
-                    ingressP95Mbps: entry.ingressP95Mbps || 0,
-                    egressP95Mbps: entry.egressP95Mbps || 0,
-                  });
-                }
-              });
-            }
-          });
-
-          const mergedTimeSeries = Array.from(timeSeriesMap.values())
-            .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
-          // Build current data - always include ingress/egress breakdown
-          const currentData = {
-            p95Mbps: result.data.reduce((sum, entry) => sum + (entry.data.current?.p95Mbps || 0), 0),
-            ingressP95Mbps: result.data.reduce((sum, entry) => sum + (entry.data.current?.ingressP95Mbps || 0), 0),
-            egressP95Mbps: result.data.reduce((sum, entry) => sum + (entry.data.current?.egressP95Mbps || 0), 0),
-          };
-
-          // Build previous data - always include ingress/egress breakdown
-          const previousData = {
-            p95Mbps: result.data.reduce((sum, entry) => sum + (entry.data.previous?.p95Mbps || 0), 0),
-            ingressP95Mbps: result.data.reduce((sum, entry) => sum + (entry.data.previous?.ingressP95Mbps || 0), 0),
-            egressP95Mbps: result.data.reduce((sum, entry) => sum + (entry.data.previous?.egressP95Mbps || 0), 0),
-          };
-
-          const serviceData = {
-            enabled: true,
-            threshold: result.config.threshold,
-            current: currentData,
-            previous: previousData,
-            timeSeries: mergedTimeSeries,
-            perAccountData: result.data.map(entry => ({
-              accountId: entry.accountId,
-              current: entry.data.current,
-              previous: entry.data.previous,
-              timeSeries: entry.data.timeSeries,
-            })),
-          };
-
-          if (result.type === 'magicTransit') {
-            magicTransitData = serviceData;
-            console.log(`Magic Transit: ${magicTransitData.current.p95Mbps} Mbps current, ${magicTransitData.previous.p95Mbps} Mbps previous`);
-          } else {
-            magicWanData = serviceData;
-            console.log(`Magic WAN: ${magicWanData.current.p95Mbps} Mbps current, ${magicWanData.previous.p95Mbps} Mbps previous`);
-          }
-        }
-      }
-      timings.magicTransitWan = Date.now() - magicStart;
-      console.log(`⏱️ Magic Transit/WAN (parallel): ${timings.magicTransitWan}ms`);
-    } else {
-      console.log('⏭️ Magic Transit/WAN disabled - skipping fetch');
-    }
-    
-    // Log timing summary
-    const totalTime = Date.now() - overallStart;
-    console.log(`\n📊 TIMING SUMMARY (Total: ${totalTime}ms):`);
-    Object.entries(timings).forEach(([key, ms]) => {
-      console.log(`   ${key}: ${ms}ms (${((ms/totalTime)*100).toFixed(1)}%)`);
-    });
-    
-    // Build response with only enabled metrics
-    const response = {
-      phase: 3,
-      ...(coreMetrics || {}),
-      ...(botManagementData && { botManagement: botManagementData }),
-      ...(apiShieldData && { apiShield: apiShieldData }),
-      ...(pageShieldData && { pageShield: pageShieldData }),
-      ...(advancedRateLimitingData && { advancedRateLimiting: advancedRateLimitingData }),
-      ...(argoData && { argo: argoData }),
-      ...(cacheReserveData && { cacheReserve: cacheReserveData }),
-      ...(loadBalancingData && { loadBalancing: loadBalancingData }),
-      ...(customHostnamesData && { customHostnames: customHostnamesData }),
-      ...(logExplorerData && { logExplorer: logExplorerData }),
-      ...(zeroTrustSeatsData && { zeroTrustSeats: zeroTrustSeatsData }),
-      ...(workersPagesData && { workersPages: workersPagesData }),
-      ...(r2StorageData && { r2Storage: r2StorageData }),
-      ...(d1Data && { d1: d1Data }),
-      ...(kvData && { kv: kvData }),
-      ...(streamData && { stream: streamData }),
-      ...(imagesData && { images: imagesData }),
-      ...(workersAIData && { workersAI: workersAIData }),
-      ...(queuesData && { queues: queuesData }),
-      ...(workersLogsTracesData && { workersLogsTraces: workersLogsTracesData }),
-      ...(spectrumData && { spectrum: spectrumData }),
-      ...(durableObjectsData && { durableObjects: durableObjectsData }),
-      ...(magicTransitData && { magicTransit: magicTransitData }),
-      ...(magicWanData && { magicWan: magicWanData }),
-    };
-    
+    const data = await fetchAllMetrics(apiKey, accountIds, config, env);
     return new Response(
-      JSON.stringify(response),
+      JSON.stringify({ ...data, phase: 3 }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
-
   } catch (error) {
     console.error('Progressive metrics error:', error);
     return new Response(
@@ -2027,6 +408,213 @@ async function fetchPhase2Data(apiKey, accountIds, env) {
   return {
     ...aggregated,
     loading: true, // Still loading historical data
+  };
+}
+
+function mergeTS(entries, fields) {
+  const map = new Map();
+  entries.forEach(ts => {
+    const ex = map.get(ts.month) || { month: ts.month, timestamp: ts.timestamp, ...Object.fromEntries(fields.map(f => [f, 0])) };
+    fields.forEach(f => { ex[f] = (ex[f] || 0) + (ts[f] || 0); });
+    map.set(ts.month, ex);
+  });
+  return Array.from(map.values()).sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+}
+
+async function fetchAllMetrics(apiKey, accountIds, config, env) {
+  const timings = {};
+  const overallStart = Date.now();
+  let coreMetrics = null;
+  let successfulMetrics = [];
+  let zonesCount = 0;
+  let zonesData = null;
+
+  const coreEnabled = config?.applicationServices?.core?.enabled !== false;
+  const trafficEnabled = config?.applicationServices?.core?.trafficEnabled !== undefined ? config.applicationServices.core.trafficEnabled : coreEnabled;
+  const dnsEnabled = config?.applicationServices?.core?.dnsEnabled !== undefined ? config.applicationServices.core.dnsEnabled : coreEnabled;
+  const anyCoreEnabled = coreEnabled || trafficEnabled || dnsEnabled;
+
+  if (anyCoreEnabled) {
+    const coreStart = Date.now();
+    console.log('📊 [Wave 1] Fetching App Services Core metrics + zones...');
+    const accountFetches = await Promise.allSettled(
+      accountIds.map(async accountId => {
+        const [metrics, accountName, zones] = await Promise.all([
+          fetchAccountMetrics(apiKey, accountId, env),
+          fetchAccountName(apiKey, accountId),
+          fetchEnterpriseZones(apiKey, accountId),
+        ]);
+        return { accountId, metrics, accountName, zones: zones || [] };
+      })
+    );
+    const successfulFetches = accountFetches.filter(r => r.status === 'fulfilled').map(r => r.value);
+    successfulMetrics = successfulFetches.map(f => f.metrics).filter(Boolean);
+    if (successfulMetrics.length > 0) {
+      coreMetrics = aggregateAccountMetrics(successfulMetrics);
+    } else {
+      console.warn('⚠️ Failed to fetch core metrics from any account');
+    }
+    const accountNames = {};
+    const allZones = [];
+    successfulFetches.forEach(({ accountId, accountName, zones }) => {
+      accountNames[accountId] = accountName || accountId;
+      zones.forEach(z => allZones.push({ ...z, account: { id: accountId, name: accountNames[accountId] } }));
+    });
+    zonesCount = allZones.length;
+    const zoneMonthKey = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`;
+    try {
+      await env.CONFIG_KV.put(`monthly-zone-count:${zoneMonthKey}`, JSON.stringify({ count: zonesCount, timestamp: new Date().toISOString() }), { expirationTtl: 31536000 });
+    } catch (e) { console.error('Failed to store zone count snapshot:', e); }
+    const zonesTimeSeries = await getHistoricalZoneCountData(env, zonesCount);
+    zonesData = { zones: allZones.map(z => ({ id: z.id, name: z.name, account: z.account })), accounts: accountNames, enterprise: zonesCount, zonesTimeSeries };
+    timings.wave1 = Date.now() - coreStart;
+    console.log(`⏱️ Wave 1: ${timings.wave1}ms`);
+  } else {
+    console.log('⏭️ App Services Core disabled - skipping');
+  }
+
+  const wave2Start = Date.now();
+  const wave2Promises = [];
+
+  if (config?.applicationServices?.botManagement?.enabled && accountIds.length > 0) {
+    const c = config.applicationServices.botManagement;
+    wave2Promises.push(Promise.allSettled(accountIds.map(id => fetchBotManagementForAccount(apiKey, id, c, env).then(data => ({ accountId: id, data })))).then(results => ({ key: 'botManagement', cfg: c, results })));
+  }
+  if (successfulMetrics.length > 0) {
+    if (config?.applicationServices?.apiShield?.enabled) { const c = config.applicationServices.apiShield; wave2Promises.push(Promise.allSettled(successfulMetrics.map(a => calculateZoneBasedAddonForAccount(a, c, env, 'api-shield').then(d => ({ accountId: a.accountId, data: d })))).then(results => ({ key: 'apiShield', cfg: c, results }))); }
+    if (config?.applicationServices?.pageShield?.enabled) { const c = config.applicationServices.pageShield; wave2Promises.push(Promise.allSettled(successfulMetrics.map(a => calculateZoneBasedAddonForAccount(a, c, env, 'page-shield').then(d => ({ accountId: a.accountId, data: d })))).then(results => ({ key: 'pageShield', cfg: c, results }))); }
+    if (config?.applicationServices?.advancedRateLimiting?.enabled) { const c = config.applicationServices.advancedRateLimiting; wave2Promises.push(Promise.allSettled(successfulMetrics.map(a => calculateZoneBasedAddonForAccount(a, c, env, 'advanced-rate-limiting').then(d => ({ accountId: a.accountId, data: d })))).then(results => ({ key: 'advancedRateLimiting', cfg: c, results }))); }
+    if (config?.applicationServices?.argo?.enabled) { const c = config.applicationServices.argo; wave2Promises.push(Promise.allSettled(successfulMetrics.map(a => calculateArgoForAccount(a, c, env).then(d => ({ accountId: a.accountId, data: d })))).then(results => ({ key: 'argo', cfg: c, results }))); }
+  }
+  const ztIds = config?.zeroTrust?.seats?.accountIds || []; if (config?.zeroTrust?.seats?.enabled && ztIds.length > 0) { const c = config.zeroTrust.seats; wave2Promises.push(Promise.allSettled(ztIds.map(id => fetchZeroTrustSeatsForAccount(apiKey, id, c, env).then(data => ({ accountId: id, data })))).then(results => ({ key: 'zeroTrustSeats', cfg: c, results }))); }
+  const wpIds = config?.developerServices?.workersPages?.accountIds || []; if (config?.developerServices?.workersPages?.enabled && wpIds.length > 0) { const c = config.developerServices.workersPages; wave2Promises.push(Promise.allSettled(wpIds.map(id => fetchWorkersPagesForAccount(apiKey, id, c, env).then(data => ({ accountId: id, data })))).then(results => ({ key: 'workersPages', cfg: c, results }))); }
+  const r2Ids = config?.developerServices?.r2Storage?.accountIds || []; if (config?.developerServices?.r2Storage?.enabled && r2Ids.length > 0) { const c = config.developerServices.r2Storage; wave2Promises.push(Promise.allSettled(r2Ids.map(id => fetchR2StorageForAccount(apiKey, id, c, env).then(data => ({ accountId: id, data })))).then(results => ({ key: 'r2Storage', cfg: c, results }))); }
+  const d1Ids = config?.developerServices?.d1?.accountIds || []; if (config?.developerServices?.d1?.enabled && d1Ids.length > 0) { const c = config.developerServices.d1; wave2Promises.push(Promise.allSettled(d1Ids.map(id => fetchD1ForAccount(apiKey, id, c, env).then(data => ({ accountId: id, data })))).then(results => ({ key: 'd1', cfg: c, results }))); }
+  const kvIds = config?.developerServices?.kv?.accountIds || []; if (config?.developerServices?.kv?.enabled && kvIds.length > 0) { const c = config.developerServices.kv; wave2Promises.push(Promise.allSettled(kvIds.map(id => fetchKVForAccount(apiKey, id, c, env).then(data => ({ accountId: id, data })))).then(results => ({ key: 'kv', cfg: c, results }))); }
+  const streamIds = config?.developerServices?.stream?.accountIds || []; if (config?.developerServices?.stream?.enabled && streamIds.length > 0) { const c = config.developerServices.stream; wave2Promises.push(Promise.allSettled(streamIds.map(id => fetchStreamForAccount(apiKey, id, c, env).then(data => ({ accountId: id, data })))).then(results => ({ key: 'stream', cfg: c, results }))); }
+  const imgIds = config?.developerServices?.images?.accountIds || []; if (config?.developerServices?.images?.enabled && imgIds.length > 0) { const c = config.developerServices.images; wave2Promises.push(Promise.allSettled(imgIds.map(id => fetchImagesForAccount(apiKey, id, c, env).then(data => ({ accountId: id, data })))).then(results => ({ key: 'images', cfg: c, results }))); }
+  const waiIds = config?.developerServices?.workersAI?.accountIds || []; if (config?.developerServices?.workersAI?.enabled && waiIds.length > 0) { const c = config.developerServices.workersAI; wave2Promises.push(Promise.allSettled(waiIds.map(id => fetchWorkersAIForAccount(apiKey, id, c, env).then(data => ({ accountId: id, data })))).then(results => ({ key: 'workersAI', cfg: c, results }))); }
+  const qIds = config?.developerServices?.queues?.accountIds || []; if (config?.developerServices?.queues?.enabled && qIds.length > 0) { const c = config.developerServices.queues; wave2Promises.push(Promise.allSettled(qIds.map(id => fetchQueuesForAccount(apiKey, id, c, env).then(data => ({ accountId: id, data })))).then(results => ({ key: 'queues', cfg: c, results }))); }
+  const wltIds = config?.developerServices?.workersLogsTraces?.accountIds || []; if (config?.developerServices?.workersLogsTraces?.enabled && wltIds.length > 0) { const c = config.developerServices.workersLogsTraces; wave2Promises.push(Promise.allSettled(wltIds.map(id => fetchWorkersLogsTracesForAccount(apiKey, id, c, env).then(data => ({ accountId: id, data })))).then(results => ({ key: 'workersLogsTraces', cfg: c, results }))); }
+  const specZones = config?.networkServices?.spectrum?.zones || []; if (config?.networkServices?.spectrum?.enabled && specZones.length > 0) { const c = config.networkServices.spectrum; wave2Promises.push(Promise.allSettled(specZones.map(zoneId => fetchSpectrumForZone(apiKey, zoneId, c, env).then(data => ({ zoneId, data })))).then(results => ({ key: 'spectrum', cfg: c, results }))); }
+  const crZones = config?.applicationServices?.cacheReserve?.zones || [];
+  if (config?.applicationServices?.cacheReserve?.enabled && crZones.length > 0) {
+    const c = config.applicationServices.cacheReserve;
+    const znMap = {};
+    successfulMetrics.forEach(a => (a.zoneBreakdown?.zones || []).forEach(z => { if (z.zoneTag && z.zoneName) znMap[z.zoneTag] = z.zoneName; }));
+    wave2Promises.push(Promise.allSettled(crZones.map(zoneId => fetchCacheReserveForZone(apiKey, zoneId, znMap[zoneId] || zoneId, env))).then(results => ({ key: 'cacheReserve', cfg: c, results })));
+  }
+  const lbIds = config?.applicationServices?.loadBalancing?.accountIds || []; if (config?.applicationServices?.loadBalancing?.enabled && lbIds.length > 0) { const c = config.applicationServices.loadBalancing; wave2Promises.push(Promise.allSettled(lbIds.map(id => fetchLoadBalancingForAccount(apiKey, id, env).then(data => ({ accountId: id, data })))).then(results => ({ key: 'loadBalancing', cfg: c, results }))); }
+  const chIds = config?.applicationServices?.customHostnames?.accountIds || []; if (config?.applicationServices?.customHostnames?.enabled && chIds.length > 0) { const c = config.applicationServices.customHostnames; wave2Promises.push(Promise.allSettled(chIds.map(id => fetchCustomHostnamesForAccount(apiKey, id, env).then(data => ({ accountId: id, data })))).then(results => ({ key: 'customHostnames', cfg: c, results }))); }
+  const leIds = config?.applicationServices?.logExplorer?.accountIds || []; if (config?.applicationServices?.logExplorer?.enabled && leIds.length > 0) { const c = config.applicationServices.logExplorer; wave2Promises.push(Promise.allSettled(leIds.map(id => fetchLogExplorerForAccount(apiKey, id, env).then(data => ({ accountId: id, data })))).then(results => ({ key: 'logExplorer', cfg: c, results }))); }
+  const doIds = config?.developerServices?.durableObjects?.accountIds || []; if (config?.developerServices?.durableObjects?.enabled && doIds.length > 0) { const c = config.developerServices.durableObjects; wave2Promises.push(Promise.allSettled(doIds.map(id => fetchDurableObjectsForAccount(apiKey, id, c, env).then(data => ({ accountId: id, data })))).then(results => ({ key: 'durableObjects', cfg: c, results }))); }
+  const mtIds = config?.networkServices?.magicTransit?.accountIds || []; if (config?.networkServices?.magicTransit?.enabled && mtIds.length > 0) { const c = config.networkServices.magicTransit; wave2Promises.push(Promise.allSettled(mtIds.map(id => fetchMagicBandwidthForAccount(apiKey, id, c, env, 'magicTransit').then(data => ({ accountId: id, data })))).then(results => ({ key: 'magicTransit', cfg: c, results }))); }
+  const mwIds = config?.networkServices?.magicWan?.accountIds || []; if (config?.networkServices?.magicWan?.enabled && mwIds.length > 0) { const c = config.networkServices.magicWan; wave2Promises.push(Promise.allSettled(mwIds.map(id => fetchMagicBandwidthForAccount(apiKey, id, c, env, 'magicWan').then(data => ({ accountId: id, data })))).then(results => ({ key: 'magicWan', cfg: c, results }))); }
+
+  console.log(`🚀 [Wave 2] Executing ${wave2Promises.length} parallel fetches...`);
+  const wave2Results = await Promise.allSettled(wave2Promises);
+  timings.wave2Total = Date.now() - wave2Start;
+  timings.total = Date.now() - overallStart;
+  console.log(`⏱️ Wave 2: ${timings.wave2Total}ms | Total: ${timings.total}ms`);
+  let botManagementData = null, apiShieldData = null, pageShieldData = null;
+  let advancedRateLimitingData = null, argoData = null, zeroTrustSeatsData = null;
+  let workersPagesData = null, r2StorageData = null, d1Data = null, kvData = null;
+  let streamData = null, imagesData = null, workersAIData = null, queuesData = null;
+  let workersLogsTracesData = null, spectrumData = null, cacheReserveData = null;
+  let loadBalancingData = null, customHostnamesData = null, logExplorerData = null;
+  let durableObjectsData = null, magicTransitData = null, magicWanData = null;
+
+  for (const settled of wave2Results) {
+    if (settled.status !== 'fulfilled') continue;
+    const { key, cfg, results } = settled.value;
+    const ok = results.filter(r => r.status === 'fulfilled' && r.value?.data).map(r => r.value);
+    if (key !== 'cacheReserve' && key !== 'spectrum' && ok.length === 0) continue;
+    const pad = (e, f) => e.data.current[f] || 0;
+    const padP = (e, f) => e.data.previous[f] || 0;
+    const sumC = (f) => ok.reduce((s, e) => s + pad(e, f), 0);
+    const sumP = (f) => ok.reduce((s, e) => s + padP(e, f), 0);
+    const ts = (fields) => mergeTS(ok.flatMap(e => e.data.timeSeries || []), fields);
+    const pad2 = (e) => ({ accountId: e.accountId, current: e.data.current, previous: e.data.previous, timeSeries: e.data.timeSeries });
+    if (key === 'botManagement') {
+      botManagementData = { enabled: true, threshold: cfg.threshold, current: { likelyHuman: sumC('likelyHuman'), zones: ok.flatMap(e => e.data.current.zones || []), confidence: ok.find(e => e.data.current?.confidence)?.data.current.confidence || null }, previous: { likelyHuman: sumP('likelyHuman'), zones: ok.flatMap(e => e.data.previous.zones || []) }, timeSeries: ts(['likelyHuman']), perAccountData: ok.map(pad2) };
+    } else if (key === 'apiShield' || key === 'pageShield' || key === 'advancedRateLimiting') {
+      const out = { enabled: true, threshold: cfg.threshold, current: { requests: sumC('requests'), zones: ok.flatMap(e => e.data.current.zones), confidence: ok.find(e => e.data.current?.confidence)?.data.current.confidence || null }, previous: { requests: sumP('requests'), zones: ok.flatMap(e => e.data.previous.zones) }, timeSeries: ts(['requests']), perAccountData: ok.map(pad2) };
+      if (key === 'apiShield') apiShieldData = out; else if (key === 'pageShield') pageShieldData = out; else advancedRateLimitingData = out;
+    } else if (key === 'argo') {
+      argoData = { enabled: true, threshold: cfg.threshold, current: { bytes: sumC('bytes'), zones: ok.flatMap(e => e.data.current.zones), confidence: ok.find(e => e.data.current?.confidence)?.data.current.confidence || null }, previous: { bytes: sumP('bytes'), zones: ok.flatMap(e => e.data.previous.zones) }, timeSeries: ts(['bytes']), perAccountData: ok.map(pad2) };
+    } else if (key === 'zeroTrustSeats') {
+      zeroTrustSeatsData = { enabled: true, threshold: cfg.threshold, current: { seats: sumC('seats') }, previous: { seats: sumP('seats') }, timeSeries: ts(['seats']), perAccountData: ok.map(pad2) };
+    } else if (key === 'workersPages') {
+      const ca = ok.reduce((a, e) => { const c = e.data.current.confidence; if (c) { a.estimate += c.estimate||0; a.lower += c.lower||0; a.upper += c.upper||0; a.sampleSize += c.sampleSize||0; a.hasData = true; } return a; }, { estimate:0, lower:0, upper:0, sampleSize:0, hasData:false });
+      let wpc = null;
+      if (ca.hasData && ca.estimate > 0) { const rw = (ca.upper-ca.lower)/(2*ca.estimate); wpc = { percent: Math.round(Math.max(0,Math.min(100,100*(1-rw)))*10)/10, sampleSize: ca.sampleSize, estimate: ca.estimate, lower: ca.lower, upper: ca.upper }; }
+      workersPagesData = { enabled: true, requestsThreshold: cfg.requestsThreshold, cpuTimeThreshold: cfg.cpuTimeThreshold, current: { requests: sumC('requests'), cpuTimeMs: sumC('cpuTimeMs'), confidence: wpc }, previous: { requests: sumP('requests'), cpuTimeMs: sumP('cpuTimeMs') }, timeSeries: ts(['requests','cpuTimeMs']), perAccountData: ok.map(pad2) };
+    } else if (key === 'r2Storage') {
+      r2StorageData = { enabled: true, classAOpsThreshold: cfg.classAOpsThreshold, classBOpsThreshold: cfg.classBOpsThreshold, storageThreshold: cfg.storageThreshold, current: { classAOps: ok.reduce((s,e)=>s+(e.data.current?.classAOps||0),0), classBOps: ok.reduce((s,e)=>s+(e.data.current?.classBOps||0),0), storageGB: ok.reduce((s,e)=>s+(e.data.current?.storageGB||0),0) }, previous: { classAOps: ok.reduce((s,e)=>s+(e.data.previous?.classAOps||0),0), classBOps: ok.reduce((s,e)=>s+(e.data.previous?.classBOps||0),0), storageGB: ok.reduce((s,e)=>s+(e.data.previous?.storageGB||0),0) }, timeSeries: ts(['classAOps','classBOps','storageGB']), perAccountData: ok.map(pad2) };
+    } else if (key === 'd1') {
+      d1Data = { enabled: true, rowsReadThreshold: cfg.rowsReadThreshold, rowsWrittenThreshold: cfg.rowsWrittenThreshold, storageThreshold: cfg.storageThreshold, current: { rowsRead: ok.reduce((s,e)=>s+(e.data.current?.rowsRead||0),0), rowsWritten: ok.reduce((s,e)=>s+(e.data.current?.rowsWritten||0),0), storageMB: ok.reduce((s,e)=>s+(e.data.current?.storageMB||0),0) }, previous: { rowsRead: ok.reduce((s,e)=>s+(e.data.previous?.rowsRead||0),0), rowsWritten: ok.reduce((s,e)=>s+(e.data.previous?.rowsWritten||0),0), storageMB: ok.reduce((s,e)=>s+(e.data.previous?.storageMB||0),0) }, timeSeries: ts(['rowsRead','rowsWritten','storageMB']), perAccountData: ok.map(pad2) };
+    } else if (key === 'kv') {
+      kvData = { enabled: true, readsThreshold: cfg.readsThreshold, writesThreshold: cfg.writesThreshold, deletesThreshold: cfg.deletesThreshold, listsThreshold: cfg.listsThreshold, storageThreshold: cfg.storageThreshold, current: { reads: sumC('reads'), writes: sumC('writes'), deletes: sumC('deletes'), lists: sumC('lists'), storageMB: sumC('storageMB') }, previous: { reads: sumP('reads'), writes: sumP('writes'), deletes: sumP('deletes'), lists: sumP('lists'), storageMB: sumP('storageMB') }, timeSeries: ts(['reads','writes','deletes','lists','storageMB']), perAccountData: ok.map(pad2) };
+    } else if (key === 'stream') {
+      streamData = { enabled: true, minutesStoredThreshold: cfg.minutesStoredThreshold, minutesDeliveredThreshold: cfg.minutesDeliveredThreshold, current: { minutesStored: sumC('minutesStored'), minutesDelivered: sumC('minutesDelivered') }, previous: { minutesStored: sumP('minutesStored'), minutesDelivered: sumP('minutesDelivered') }, timeSeries: ts(['minutesStored','minutesDelivered']), perAccountData: ok.map(pad2) };
+    } else if (key === 'images') {
+      imagesData = { enabled: true, imagesStoredThreshold: cfg.imagesStoredThreshold, imagesDeliveredThreshold: cfg.imagesDeliveredThreshold, current: { imagesStored: sumC('imagesStored'), imagesDelivered: sumC('imagesDelivered') }, previous: { imagesStored: sumP('imagesStored'), imagesDelivered: sumP('imagesDelivered') }, timeSeries: ts(['imagesStored','imagesDelivered']), perAccountData: ok.map(pad2) };
+    } else if (key === 'workersAI') {
+      workersAIData = { enabled: true, neuronsThreshold: cfg.neuronsThreshold, current: { neurons: sumC('neurons') }, previous: { neurons: sumP('neurons') }, timeSeries: ts(['neurons']), perAccountData: ok.map(pad2) };
+    } else if (key === 'queues') {
+      queuesData = { enabled: true, operationsThreshold: cfg.operationsThreshold, current: { operations: sumC('operations') }, previous: { operations: sumP('operations') }, timeSeries: ts(['operations']), perAccountData: ok.map(pad2) };
+    } else if (key === 'workersLogsTraces') {
+      workersLogsTracesData = { enabled: true, eventsThreshold: cfg.eventsThreshold, current: { events: sumC('events') }, previous: { events: sumP('events') }, timeSeries: ts(['events']), perAccountData: ok.map(pad2) };
+    } else if (key === 'spectrum') {
+      const sp = results.filter(r => r.status === 'fulfilled' && r.value?.data).map(r => r.value);
+      if (sp.length > 0) spectrumData = { enabled: true, dataTransferThreshold: cfg.dataTransferThreshold, connectionsThreshold: cfg.connectionsThreshold, current: { dataTransfer: sp.reduce((s,e)=>s+(e.data.current.dataTransfer||0),0), p95Concurrent: Math.max(...sp.map(e=>e.data.current.p95Concurrent||0)) }, previous: { dataTransfer: sp.reduce((s,e)=>s+(e.data.previous.dataTransfer||0),0), p95Concurrent: Math.max(...sp.map(e=>e.data.previous.p95Concurrent||0)) }, timeSeries: mergeTS(sp.flatMap(e=>e.data.timeSeries||[]),['dataTransfer']), perZoneData: sp.map(e=>({ zoneId: e.zoneId, current: e.data.current, previous: e.data.previous, timeSeries: e.data.timeSeries })) };
+    } else if (key === 'cacheReserve') {
+      const cr = results.filter(r => r.status === 'fulfilled' && r.value).map(r => r.value);
+      if (cr.length > 0) cacheReserveData = { enabled: true, storageThreshold: cfg.storageThreshold, classAOpsThreshold: cfg.classAOpsThreshold, classBOpsThreshold: cfg.classBOpsThreshold, current: { storageGBDays: cr.reduce((s,e)=>s+(e.current.storageGBDays||0),0), classAOps: cr.reduce((s,e)=>s+(e.current.classAOps||0),0), classBOps: cr.reduce((s,e)=>s+(e.current.classBOps||0),0), zones: cr.map(e=>({ zoneId:e.zoneId, zoneName:e.zoneName, storageGBDays:e.current.storageGBDays, classAOps:e.current.classAOps, classBOps:e.current.classBOps })) }, previous: { storageGBDays: cr.reduce((s,e)=>s+(e.previous.storageGBDays||0),0), classAOps: cr.reduce((s,e)=>s+(e.previous.classAOps||0),0), classBOps: cr.reduce((s,e)=>s+(e.previous.classBOps||0),0), zones: cr.map(e=>({ zoneId:e.zoneId, zoneName:e.zoneName, storageGBDays:e.previous.storageGBDays, classAOps:e.previous.classAOps, classBOps:e.previous.classBOps })) }, timeSeries: mergeTS(cr.flatMap(e=>e.timeSeries||[]),['storageGBDays','classAOps','classBOps']), perZoneData: cr.map(e=>({ zoneId:e.zoneId, zoneName:e.zoneName, current:e.current, previous:e.previous, timeSeries:e.timeSeries })) };
+    } else if (key === 'loadBalancing') {
+      loadBalancingData = { enabled: true, threshold: cfg.threshold, current: { endpoints: ok.reduce((s,e)=>s+e.data.current.endpoints,0) }, previous: { endpoints: ok.reduce((s,e)=>s+e.data.previous.endpoints,0) }, timeSeries: ts(['endpoints']), perAccountData: ok.map(pad2) };
+    } else if (key === 'customHostnames') {
+      customHostnamesData = { enabled: true, threshold: cfg.threshold, current: { hostnames: ok.reduce((s,e)=>s+e.data.current.hostnames,0) }, previous: { hostnames: ok.reduce((s,e)=>s+e.data.previous.hostnames,0) }, timeSeries: ts(['hostnames']), perAccountData: ok.map(pad2) };
+    } else if (key === 'logExplorer') {
+      logExplorerData = { enabled: true, threshold: cfg.threshold, current: { billableGB: ok.reduce((s,e)=>s+e.data.current.billableGB,0) }, previous: { billableGB: ok.reduce((s,e)=>s+e.data.previous.billableGB,0) }, timeSeries: ts(['billableGB']), perAccountData: ok.map(pad2) };
+    } else if (key === 'durableObjects') {
+      const sf = (f) => ok.reduce((s,e)=>s+(e.data.current[f]||0),0);
+      const spf = (f) => ok.reduce((s,e)=>s+(e.data.previous[f]||0),0);
+      durableObjectsData = { enabled: true, requestsThreshold: cfg.requestsThreshold, durationThreshold: cfg.durationThreshold, sqliteRowsReadThreshold: cfg.sqliteRowsReadThreshold, sqliteRowsWrittenThreshold: cfg.sqliteRowsWrittenThreshold, kvReadUnitsThreshold: cfg.kvReadUnitsThreshold, kvWriteUnitsThreshold: cfg.kvWriteUnitsThreshold, kvDeletesThreshold: cfg.kvDeletesThreshold, storageThreshold: cfg.storageThreshold, current: { requests:sf('requests'), durationGBs:sf('durationGBs'), sqliteRowsRead:sf('sqliteRowsRead'), sqliteRowsWritten:sf('sqliteRowsWritten'), kvReadUnits:sf('kvReadUnits'), kvWriteUnits:sf('kvWriteUnits'), kvDeletes:sf('kvDeletes'), storageMB:sf('storageMB') }, previous: { requests:spf('requests'), durationGBs:spf('durationGBs'), sqliteRowsRead:spf('sqliteRowsRead'), sqliteRowsWritten:spf('sqliteRowsWritten'), kvReadUnits:spf('kvReadUnits'), kvWriteUnits:spf('kvWriteUnits'), kvDeletes:spf('kvDeletes'), storageMB:spf('storageMB') }, timeSeries: ts(['requests','durationGBs','sqliteRowsRead','sqliteRowsWritten','kvReadUnits','kvWriteUnits','kvDeletes','storageMB']), perAccountData: ok.map(pad2) };
+    } else if (key === 'magicTransit' || key === 'magicWan') {
+      const sd = { enabled: true, threshold: cfg.threshold, current: { p95Mbps: ok.reduce((s,e)=>s+(e.data.current?.p95Mbps||0),0), ingressP95Mbps: ok.reduce((s,e)=>s+(e.data.current?.ingressP95Mbps||0),0), egressP95Mbps: ok.reduce((s,e)=>s+(e.data.current?.egressP95Mbps||0),0) }, previous: { p95Mbps: ok.reduce((s,e)=>s+(e.data.previous?.p95Mbps||0),0), ingressP95Mbps: ok.reduce((s,e)=>s+(e.data.previous?.ingressP95Mbps||0),0), egressP95Mbps: ok.reduce((s,e)=>s+(e.data.previous?.egressP95Mbps||0),0) }, timeSeries: ts(['p95Mbps','ingressP95Mbps','egressP95Mbps']), perAccountData: ok.map(pad2) };
+      if (key === 'magicTransit') magicTransitData = sd; else magicWanData = sd;
+    }
+  }
+
+  return {
+    timings,
+    ...(coreMetrics || {}),
+    zonesCount,
+    ...(zonesData && { zones: zonesData }),
+    ...(botManagementData && { botManagement: botManagementData }),
+    ...(apiShieldData && { apiShield: apiShieldData }),
+    ...(pageShieldData && { pageShield: pageShieldData }),
+    ...(advancedRateLimitingData && { advancedRateLimiting: advancedRateLimitingData }),
+    ...(argoData && { argo: argoData }),
+    ...(cacheReserveData && { cacheReserve: cacheReserveData }),
+    ...(loadBalancingData && { loadBalancing: loadBalancingData }),
+    ...(customHostnamesData && { customHostnames: customHostnamesData }),
+    ...(logExplorerData && { logExplorer: logExplorerData }),
+    ...(zeroTrustSeatsData && { zeroTrustSeats: zeroTrustSeatsData }),
+    ...(workersPagesData && { workersPages: workersPagesData }),
+    ...(r2StorageData && { r2Storage: r2StorageData }),
+    ...(d1Data && { d1: d1Data }),
+    ...(kvData && { kv: kvData }),
+    ...(streamData && { stream: streamData }),
+    ...(imagesData && { images: imagesData }),
+    ...(workersAIData && { workersAI: workersAIData }),
+    ...(queuesData && { queues: queuesData }),
+    ...(workersLogsTracesData && { workersLogsTraces: workersLogsTracesData }),
+    ...(spectrumData && { spectrum: spectrumData }),
+    ...(durableObjectsData && { durableObjects: durableObjectsData }),
+    ...(magicTransitData && { magicTransit: magicTransitData }),
+    ...(magicWanData && { magicWan: magicWanData }),
   };
 }
 
@@ -5981,11 +4569,16 @@ async function pollSpectrumConcurrent(env) {
   }
 }
 
-function computeP99(samples) {
+function computeP95ZeroFilled(samples, monthStart) {
   if (!samples || samples.length === 0) return 0;
-  const sorted = [...samples].sort((a, b) => a - b);
-  const index = Math.ceil(sorted.length * 0.99) - 1;
-  return sorted[Math.max(0, index)];
+  const now = new Date();
+  const start = monthStart || new Date(now.getFullYear(), now.getMonth(), 1);
+  const totalMinutes = Math.max(samples.length, Math.floor((now - start) / 60000));
+  const zeroFilled = [...samples];
+  while (zeroFilled.length < totalMinutes) zeroFilled.push(0);
+  zeroFilled.sort((a, b) => a - b);
+  const index = Math.ceil(zeroFilled.length * 0.95) - 1;
+  return zeroFilled[Math.max(0, index)];
 }
 
 async function fetchSpectrumForZone(apiKey, zoneId, specConfig, env) {
@@ -6002,48 +4595,61 @@ async function fetchSpectrumForZone(apiKey, zoneId, specConfig, env) {
 
   let currentDataTransfer = 0;
 
-  try {
-    const summaryResponse = await fetch(
-      `https://api.cloudflare.com/client/v4/zones/${zoneId}/spectrum/analytics/events/summary?since=${currentMonthStart.toISOString()}&until=${now.toISOString()}&metrics=bytesIngress,bytesEgress`,
-      {
-        headers: {
-          'Authorization': `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-        },
-      }
-    );
+  const SPECTRUM_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+  const currentTransferCacheKey = `spectrum-transfer:${zoneId}:${currentMonthKey}`;
+  const cachedTransfer = await env.CONFIG_KV.get(currentTransferCacheKey, 'json');
 
-    if (summaryResponse.ok) {
-      const data = await summaryResponse.json();
-      if (data.success && data.result?.totals) {
-        const ingress = data.result.totals.bytesIngress || 0;
-        const egress = data.result.totals.bytesEgress || 0;
-        currentDataTransfer = ingress + egress;
+  if (cachedTransfer && (Date.now() - cachedTransfer.cachedAt) < SPECTRUM_CACHE_TTL_MS) {
+    currentDataTransfer = cachedTransfer.bytes || 0;
+    console.log(`Spectrum data transfer from cache for zone ${zoneId}: ${(currentDataTransfer / 1e9).toFixed(2)} GB (age: ${Math.round((Date.now() - cachedTransfer.cachedAt) / 60000)}min)`);
+  } else {
+    try {
+      const summaryResponse = await fetch(
+        `https://api.cloudflare.com/client/v4/zones/${zoneId}/spectrum/analytics/events/summary?since=${currentMonthStart.toISOString()}&until=${now.toISOString()}&metrics=bytesIngress,bytesEgress`,
+        {
+          headers: {
+            'Authorization': `Bearer ${apiKey}`,
+            'Content-Type': 'application/json',
+          },
+        }
+      );
+
+      if (summaryResponse.ok) {
+        const data = await summaryResponse.json();
+        if (data.success && data.result?.totals) {
+          const ingress = data.result.totals.bytesIngress || 0;
+          const egress = data.result.totals.bytesEgress || 0;
+          currentDataTransfer = ingress + egress;
+        }
+        if (currentDataTransfer > 0) {
+          await env.CONFIG_KV.put(currentTransferCacheKey, JSON.stringify({ bytes: currentDataTransfer, cachedAt: Date.now() }), { expirationTtl: 86400 });
+        }
+      } else {
+        console.error(`Spectrum events/summary failed for zone ${zoneId}: ${summaryResponse.status}`);
+        if (cachedTransfer) currentDataTransfer = cachedTransfer.bytes || 0;
       }
-    } else {
-      console.error(`Spectrum events/summary failed for zone ${zoneId}: ${summaryResponse.status}`);
+    } catch (error) {
+      console.error(`Error fetching Spectrum for zone ${zoneId}:`, error);
+      if (cachedTransfer) { currentDataTransfer = cachedTransfer.bytes || 0; } else { return null; }
     }
-  } catch (error) {
-    console.error(`Error fetching Spectrum for zone ${zoneId}:`, error);
-    return null;
   }
 
   const concurrentKvKey = `spectrum-concurrent-samples:${zoneId}:${currentMonthKey}`;
   const concurrentData = await env.CONFIG_KV.get(concurrentKvKey, 'json');
   const currentSamples = concurrentData?.samples || [];
-  const currentP99Concurrent = computeP99(currentSamples);
+  const currentP95Concurrent = computeP95ZeroFilled(currentSamples, currentMonthStart);
 
-  console.log(`Spectrum for zone ${zoneId}: ${(currentDataTransfer / (1024*1024*1024)).toFixed(2)} GB transfer, P99 concurrent: ${currentP99Concurrent} (${currentSamples.length} samples)`);
+  console.log(`Spectrum for zone ${zoneId}: ${(currentDataTransfer / (1024*1024*1024)).toFixed(2)} GB transfer, P95 concurrent: ${currentP95Concurrent} (${currentSamples.length} samples, zero-filled to ${Math.floor((now - currentMonthStart) / 60000)} min)`);
 
   let previousDataTransfer = 0;
-  let previousP99Concurrent = 0;
+  let previousP95Concurrent = 0;
 
   const previousMonthCacheKey = `monthly-spectrum:${zoneId}:${previousMonthKey}`;
   const cachedPreviousMonth = await env.CONFIG_KV.get(previousMonthCacheKey, 'json');
 
   if (cachedPreviousMonth) {
     previousDataTransfer = cachedPreviousMonth.dataTransfer || 0;
-    previousP99Concurrent = cachedPreviousMonth.p99Concurrent || cachedPreviousMonth.maxConcurrent || 0;
+    previousP95Concurrent = cachedPreviousMonth.p95Concurrent || cachedPreviousMonth.p99Concurrent || cachedPreviousMonth.maxConcurrent || 0;
   } else if (now.getDate() >= 2) {
     try {
       const prevResponse = await fetch(
@@ -6064,11 +4670,11 @@ async function fetchSpectrumForZone(apiKey, zoneId, specConfig, env) {
       }
 
       const prevSamplesData = await env.CONFIG_KV.get(`spectrum-concurrent-samples:${zoneId}:${previousMonthKey}`, 'json');
-      previousP99Concurrent = computeP99(prevSamplesData?.samples);
+      previousP95Concurrent = computeP95ZeroFilled(prevSamplesData?.samples, previousMonthStart);
 
       await env.CONFIG_KV.put(
         previousMonthCacheKey,
-        JSON.stringify({ dataTransfer: previousDataTransfer, p99Concurrent: previousP99Concurrent, cachedAt: Date.now() }),
+        JSON.stringify({ dataTransfer: previousDataTransfer, p95Concurrent: previousP95Concurrent, cachedAt: Date.now() }),
         { expirationTtl: 31536000 }
       );
       console.log(`Cached Spectrum previous month for zone ${zoneId}`);
@@ -6084,7 +4690,7 @@ async function fetchSpectrumForZone(apiKey, zoneId, specConfig, env) {
       try {
         await env.CONFIG_KV.put(
           currentMonthCacheKey,
-          JSON.stringify({ dataTransfer: currentDataTransfer, p99Concurrent: currentP99Concurrent, cachedAt: Date.now() }),
+          JSON.stringify({ dataTransfer: currentDataTransfer, p95Concurrent: currentP95Concurrent, cachedAt: Date.now() }),
           { expirationTtl: 31536000 }
         );
         console.log(`Cached Spectrum snapshot for ${currentMonthKey}`);
@@ -6102,7 +4708,7 @@ async function fetchSpectrumForZone(apiKey, zoneId, specConfig, env) {
       month: currentMonthKey,
       timestamp: currentMonthStart.toISOString(),
       dataTransfer: currentDataTransfer,
-      p99Concurrent: currentP99Concurrent,
+      p95Concurrent: currentP95Concurrent,
     }
   ].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
 
@@ -6114,8 +4720,8 @@ async function fetchSpectrumForZone(apiKey, zoneId, specConfig, env) {
     .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
 
   return {
-    current: { dataTransfer: currentDataTransfer, p99Concurrent: currentP99Concurrent },
-    previous: { dataTransfer: previousDataTransfer, p99Concurrent: previousP99Concurrent },
+    current: { dataTransfer: currentDataTransfer, p95Concurrent: currentP95Concurrent },
+    previous: { dataTransfer: previousDataTransfer, p95Concurrent: previousP95Concurrent },
     timeSeries: deduplicatedTimeSeries,
   };
 }
@@ -6136,7 +4742,7 @@ async function getHistoricalSpectrumData(env, zoneId) {
         historicalData.push({
           month, timestamp,
           dataTransfer: data.dataTransfer || 0,
-          p99Concurrent: data.p99Concurrent || data.maxConcurrent || 0,
+          p95Concurrent: data.p95Concurrent || data.p99Concurrent || data.maxConcurrent || 0,
         });
       }
     }
@@ -7420,7 +6026,7 @@ async function fetchMagicBandwidthForAccount(apiKey, accountId, serviceConfig, e
   const currentMonthCacheKey = `current-v13-${serviceType}:${accountId}:${currentMonthKey}`;
   const cachedCurrentMonth = await env.CONFIG_KV.get(currentMonthCacheKey, 'json');
   
-  const CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes
+  const CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
   
   if (cachedCurrentMonth && cachedCurrentMonth.p95Mbps > 0 && (Date.now() - cachedCurrentMonth.cachedAt) < CACHE_TTL_MS) {
     currentP95Mbps = cachedCurrentMonth.p95Mbps;
@@ -8190,1603 +6796,12 @@ async function preWarmCache(env) {
 
     const startTime = Date.now();
     console.log(`Pre-warm: Fetching data for ${accountIds.length} account(s)...`);
-
-    let coreMetrics = null;
-    let zonesCount = 0;
-    let zonesData = null;
-    let botManagementData = null;
-    let successfulMetrics = []; // ✅ Declare outside if block so add-ons can use it!
-
-    // Fetch App Services Core if any of Enterprise Zones, Traffic, or DNS is enabled
-    const coreEnabled = config?.applicationServices?.core?.enabled !== false;
-    const trafficEnabled = config?.applicationServices?.core?.trafficEnabled !== undefined ? config.applicationServices.core.trafficEnabled : coreEnabled;
-    const dnsEnabled = config?.applicationServices?.core?.dnsEnabled !== undefined ? config.applicationServices.core.dnsEnabled : coreEnabled;
-    const anyCoreEnabled = coreEnabled || trafficEnabled || dnsEnabled;
-    if (anyCoreEnabled) {
-      console.log('Pre-warm: Fetching App Services Core metrics...');
-      
-      const accountMetricsPromises = accountIds.map(accountId => 
-        fetchAccountMetrics(apiKey, accountId, env)
-      );
-      
-      const accountMetricsResults = await Promise.allSettled(accountMetricsPromises);
-      successfulMetrics = accountMetricsResults
-        .filter(result => result.status === 'fulfilled')
-        .map(result => result.value);
-      
-      if (successfulMetrics.length > 0) {
-        coreMetrics = aggregateAccountMetrics(successfulMetrics);
-        console.log(`Pre-warm: Core metrics fetched successfully`);
-      } else {
-        console.log('Pre-warm: Failed to fetch core metrics from any account');
-      }
-
-      // Fetch zones list and account names (needed for instant display)
-      const allZones = [];
-      const accountNames = {};
-      
-      for (const accountId of accountIds) {
-        try {
-          // Fetch account name
-          const accountName = await fetchAccountName(apiKey, accountId);
-          accountNames[accountId] = accountName || accountId;
-          
-          // Fetch zones
-          const zones = await fetchEnterpriseZones(apiKey, accountId);
-          if (zones && zones.length > 0) {
-            zones.forEach(z => {
-              allZones.push({
-                ...z,
-                account: { id: accountId, name: accountNames[accountId] }
-              });
-            });
-          }
-        } catch (error) {
-          console.error(`Pre-warm: Error fetching zones for account ${accountId}:`, error);
-          accountNames[accountId] = accountId;
-        }
-      }
-      
-      zonesCount = allZones.length;
-      const zoneMonthKey = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`;
-      try {
-        await env.CONFIG_KV.put(
-          `monthly-zone-count:${zoneMonthKey}`,
-          JSON.stringify({ count: zonesCount, timestamp: new Date().toISOString() }),
-          { expirationTtl: 31536000 }
-        );
-      } catch (e) {
-        console.error('Pre-warm: Failed to store zone count snapshot:', e);
-      }
-      const zonesTimeSeries = await getHistoricalZoneCountData(env, zonesCount);
-      zonesData = {
-        zones: allZones.map(z => ({ id: z.id, name: z.name, account: z.account })),
-        accounts: accountNames,
-        enterprise: zonesCount,
-        zonesTimeSeries,
-      };
-      console.log(`Pre-warm: ${zonesCount} zones, ${Object.keys(accountNames).length} accounts cached`);
-    } else {
-      console.log('Pre-warm: App Services Core disabled - skipping fetch');
-    }
-    
-    // Fetch Bot Management if enabled
-    if (config?.applicationServices?.botManagement?.enabled && accountIds.length > 0) {
-      console.log('Pre-warm: Fetching Bot Management metrics...');
-      const botManagementConfig = config.applicationServices.botManagement;
-      
-      const botMgmtPromises = accountIds.map(accountId =>
-        fetchBotManagementForAccount(apiKey, accountId, botManagementConfig, env)
-          .then(data => ({ accountId, data })) // ✅ Include accountId with data
-      );
-      
-      const botMgmtResults = await Promise.allSettled(botMgmtPromises);
-      const botMgmtData = botMgmtResults
-        .filter(result => result.status === 'fulfilled' && result.value?.data) // Check data exists
-        .map(result => result.value); // Now has { accountId, data }
-      
-      // Aggregate bot management across accounts
-      if (botMgmtData.length > 0) {
-        // Merge timeSeries from all accounts
-        const timeSeriesMap = new Map();
-        botMgmtData.forEach(accountEntry => {
-          if (accountEntry.data.timeSeries) {
-            accountEntry.data.timeSeries.forEach(entry => {
-              const existing = timeSeriesMap.get(entry.month);
-              if (existing) {
-                existing.likelyHuman += entry.likelyHuman || 0;
-              } else {
-                timeSeriesMap.set(entry.month, {
-                  month: entry.month,
-                  timestamp: entry.timestamp,
-                  likelyHuman: entry.likelyHuman || 0,
-                });
-              }
-            });
-          }
-        });
-
-        const mergedTimeSeries = Array.from(timeSeriesMap.values())
-          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
-        // Aggregate confidence from all accounts
-        const botManagementConfidence = botMgmtData.find(entry => entry.data.current?.confidence)?.data.current.confidence || null;
-
-        botManagementData = {
-          enabled: true,
-          threshold: botManagementConfig.threshold,
-          current: {
-            likelyHuman: botMgmtData.reduce((sum, entry) => sum + entry.data.current.likelyHuman, 0),
-            zones: botMgmtData.flatMap(entry => entry.data.current.zones),
-            confidence: botManagementConfidence,
-          },
-          previous: {
-            likelyHuman: botMgmtData.reduce((sum, entry) => sum + entry.data.previous.likelyHuman, 0),
-            zones: botMgmtData.flatMap(entry => entry.data.previous.zones),
-          },
-          timeSeries: mergedTimeSeries,
-          // Store per-account data for filtering
-          perAccountData: botMgmtData.map(entry => ({
-            accountId: entry.accountId, // ✅ Use correct accountId
-            current: entry.data.current,
-            previous: entry.data.previous,
-            timeSeries: entry.data.timeSeries,
-          })),
-        };
-        console.log(`Pre-warm: Bot Management data fetched (${botManagementData.current.zones.length} zones, ${mergedTimeSeries.length} months)`);
-      }
-    } else {
-      console.log('Pre-warm: Bot Management disabled - skipping fetch');
-    }
-    
-    // Fetch API Shield if enabled (reuses existing zone data!)
-    let apiShieldData = null;
-    if (config?.applicationServices?.apiShield?.enabled && successfulMetrics && successfulMetrics.length > 0) {
-      console.log('Pre-warm: Calculating API Shield metrics from existing zone data...');
-      const apiShieldConfig = config.applicationServices.apiShield;
-      
-      const apiShieldPromises = successfulMetrics.map(accountData =>
-        calculateZoneBasedAddonForAccount(accountData, apiShieldConfig, env, 'api-shield')
-          .then(data => ({ accountId: accountData.accountId, data }))
-      );
-      
-      const apiShieldResults = await Promise.allSettled(apiShieldPromises);
-      const apiShieldAccounts = apiShieldResults
-        .filter(result => result.status === 'fulfilled' && result.value?.data)
-        .map(result => result.value);
-      
-      if (apiShieldAccounts.length > 0) {
-        const timeSeriesMap = new Map();
-        apiShieldAccounts.forEach(accountEntry => {
-          if (accountEntry.data.timeSeries) {
-            accountEntry.data.timeSeries.forEach(entry => {
-              const existing = timeSeriesMap.get(entry.month);
-              if (existing) {
-                existing.requests += entry.requests || 0;
-              } else {
-                timeSeriesMap.set(entry.month, {
-                  month: entry.month,
-                  timestamp: entry.timestamp,
-                  requests: entry.requests || 0,
-                });
-              }
-            });
-          }
-        });
-
-        const mergedTimeSeries = Array.from(timeSeriesMap.values())
-          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
-        // Aggregate confidence from all accounts
-        const apiShieldConfidence = apiShieldAccounts.find(entry => entry.data.current?.confidence)?.data.current.confidence || null;
-
-        apiShieldData = {
-          enabled: true,
-          threshold: apiShieldConfig.threshold,
-          current: {
-            requests: apiShieldAccounts.reduce((sum, entry) => sum + entry.data.current.requests, 0),
-            zones: apiShieldAccounts.flatMap(entry => entry.data.current.zones),
-            confidence: apiShieldConfidence,
-          },
-          previous: {
-            requests: apiShieldAccounts.reduce((sum, entry) => sum + entry.data.previous.requests, 0),
-            zones: apiShieldAccounts.flatMap(entry => entry.data.previous.zones),
-          },
-          timeSeries: mergedTimeSeries,
-          perAccountData: apiShieldAccounts.map(entry => ({
-            accountId: entry.accountId,
-            current: entry.data.current,
-            previous: entry.data.previous,
-            timeSeries: entry.data.timeSeries,
-          })),
-        };
-        console.log(`Pre-warm: API Shield data calculated (${apiShieldData.current.zones.length} zones, ${mergedTimeSeries.length} months)`);
-      }
-    } else {
-      console.log('Pre-warm: API Shield disabled - skipping calculation');
-    }
-    
-    // Fetch Page Shield if enabled (reuses existing zone data!)
-    let pageShieldData = null;
-    if (config?.applicationServices?.pageShield?.enabled && successfulMetrics && successfulMetrics.length > 0) {
-      console.log('Pre-warm: Calculating Page Shield metrics from existing zone data...');
-      const pageShieldConfig = config.applicationServices.pageShield;
-      
-      const pageShieldPromises = successfulMetrics.map(accountData =>
-        calculateZoneBasedAddonForAccount(accountData, pageShieldConfig, env, 'page-shield')
-          .then(data => ({ accountId: accountData.accountId, data }))
-      );
-      
-      const pageShieldResults = await Promise.allSettled(pageShieldPromises);
-      const pageShieldAccounts = pageShieldResults
-        .filter(result => result.status === 'fulfilled' && result.value?.data)
-        .map(result => result.value);
-      
-      if (pageShieldAccounts.length > 0) {
-        const timeSeriesMap = new Map();
-        pageShieldAccounts.forEach(accountEntry => {
-          if (accountEntry.data.timeSeries) {
-            accountEntry.data.timeSeries.forEach(entry => {
-              const existing = timeSeriesMap.get(entry.month);
-              if (existing) {
-                existing.requests += entry.requests || 0;
-              } else {
-                timeSeriesMap.set(entry.month, {
-                  month: entry.month,
-                  timestamp: entry.timestamp,
-                  requests: entry.requests || 0,
-                });
-              }
-            });
-          }
-        });
-
-        const mergedTimeSeries = Array.from(timeSeriesMap.values())
-          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
-        // Aggregate confidence from all accounts
-        const pageShieldConfidence = pageShieldAccounts.find(entry => entry.data.current?.confidence)?.data.current.confidence || null;
-
-        pageShieldData = {
-          enabled: true,
-          threshold: pageShieldConfig.threshold,
-          current: {
-            requests: pageShieldAccounts.reduce((sum, entry) => sum + entry.data.current.requests, 0),
-            zones: pageShieldAccounts.flatMap(entry => entry.data.current.zones),
-            confidence: pageShieldConfidence,
-          },
-          previous: {
-            requests: pageShieldAccounts.reduce((sum, entry) => sum + entry.data.previous.requests, 0),
-            zones: pageShieldAccounts.flatMap(entry => entry.data.previous.zones),
-          },
-          timeSeries: mergedTimeSeries,
-          perAccountData: pageShieldAccounts.map(entry => ({
-            accountId: entry.accountId,
-            current: entry.data.current,
-            previous: entry.data.previous,
-            timeSeries: entry.data.timeSeries,
-          })),
-        };
-        console.log(`Pre-warm: Page Shield data calculated (${pageShieldData.current.zones.length} zones, ${mergedTimeSeries.length} months)`);
-      }
-    } else {
-      console.log('Pre-warm: Page Shield disabled - skipping calculation');
-    }
-    
-    // Fetch Advanced Rate Limiting if enabled (reuses existing zone data!)
-    let advancedRateLimitingData = null;
-    if (config?.applicationServices?.advancedRateLimiting?.enabled && successfulMetrics && successfulMetrics.length > 0) {
-      console.log('Pre-warm: Calculating Advanced Rate Limiting metrics from existing zone data...');
-      const rateLimitingConfig = config.applicationServices.advancedRateLimiting;
-      
-      const rateLimitingPromises = successfulMetrics.map(accountData =>
-        calculateZoneBasedAddonForAccount(accountData, rateLimitingConfig, env, 'advanced-rate-limiting')
-          .then(data => ({ accountId: accountData.accountId, data }))
-      );
-      
-      const rateLimitingResults = await Promise.allSettled(rateLimitingPromises);
-      const rateLimitingAccounts = rateLimitingResults
-        .filter(result => result.status === 'fulfilled' && result.value?.data)
-        .map(result => result.value);
-      
-      if (rateLimitingAccounts.length > 0) {
-        const timeSeriesMap = new Map();
-        rateLimitingAccounts.forEach(accountEntry => {
-          if (accountEntry.data.timeSeries) {
-            accountEntry.data.timeSeries.forEach(entry => {
-              const existing = timeSeriesMap.get(entry.month);
-              if (existing) {
-                existing.requests += entry.requests || 0;
-              } else {
-                timeSeriesMap.set(entry.month, {
-                  month: entry.month,
-                  timestamp: entry.timestamp,
-                  requests: entry.requests || 0,
-                });
-              }
-            });
-          }
-        });
-
-        const mergedTimeSeries = Array.from(timeSeriesMap.values())
-          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
-        // Aggregate confidence from all accounts
-        const rateLimitingConfidence = rateLimitingAccounts.find(entry => entry.data.current?.confidence)?.data.current.confidence || null;
-
-        advancedRateLimitingData = {
-          enabled: true,
-          threshold: rateLimitingConfig.threshold,
-          current: {
-            requests: rateLimitingAccounts.reduce((sum, entry) => sum + entry.data.current.requests, 0),
-            zones: rateLimitingAccounts.flatMap(entry => entry.data.current.zones),
-            confidence: rateLimitingConfidence,
-          },
-          previous: {
-            requests: rateLimitingAccounts.reduce((sum, entry) => sum + entry.data.previous.requests, 0),
-            zones: rateLimitingAccounts.flatMap(entry => entry.data.previous.zones),
-          },
-          timeSeries: mergedTimeSeries,
-          perAccountData: rateLimitingAccounts.map(entry => ({
-            accountId: entry.accountId,
-            current: entry.data.current,
-            previous: entry.data.previous,
-            timeSeries: entry.data.timeSeries,
-          })),
-        };
-        console.log(`Pre-warm: Advanced Rate Limiting data calculated (${advancedRateLimitingData.current.zones.length} zones, ${mergedTimeSeries.length} months)`);
-      }
-    } else {
-      console.log('Pre-warm: Advanced Rate Limiting disabled - skipping calculation');
-    }
-
-    // Calculate Argo Smart Routing if enabled (reuses existing zone data!)
-    let argoData = null;
-    if (config?.applicationServices?.argo?.enabled && successfulMetrics && successfulMetrics.length > 0) {
-      console.log('Pre-warm: Calculating Argo Smart Routing metrics from existing zone data...');
-      const argoConfig = config.applicationServices.argo;
-
-      const argoPromises = successfulMetrics.map(accountData =>
-        calculateArgoForAccount(accountData, argoConfig, env)
-          .then(data => ({ accountId: accountData.accountId, data }))
-      );
-
-      const argoResults = await Promise.allSettled(argoPromises);
-      const argoAccounts = argoResults
-        .filter(result => result.status === 'fulfilled' && result.value?.data)
-        .map(result => result.value);
-
-      if (argoAccounts.length > 0) {
-        const timeSeriesMap = new Map();
-        argoAccounts.forEach(accountEntry => {
-          if (accountEntry.data.timeSeries) {
-            accountEntry.data.timeSeries.forEach(entry => {
-              const existing = timeSeriesMap.get(entry.month);
-              if (existing) {
-                existing.bytes += entry.bytes || 0;
-              } else {
-                timeSeriesMap.set(entry.month, {
-                  month: entry.month,
-                  timestamp: entry.timestamp,
-                  bytes: entry.bytes || 0,
-                });
-              }
-            });
-          }
-        });
-
-        const mergedTimeSeries = Array.from(timeSeriesMap.values())
-          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
-        const argoConfidence = argoAccounts.find(entry => entry.data.current?.confidence)?.data.current.confidence || null;
-
-        argoData = {
-          enabled: true,
-          threshold: argoConfig.threshold,
-          current: {
-            bytes: argoAccounts.reduce((sum, entry) => sum + entry.data.current.bytes, 0),
-            zones: argoAccounts.flatMap(entry => entry.data.current.zones),
-            confidence: argoConfidence,
-          },
-          previous: {
-            bytes: argoAccounts.reduce((sum, entry) => sum + entry.data.previous.bytes, 0),
-            zones: argoAccounts.flatMap(entry => entry.data.previous.zones),
-          },
-          timeSeries: mergedTimeSeries,
-          perAccountData: argoAccounts.map(entry => ({
-            accountId: entry.accountId,
-            current: entry.data.current,
-            previous: entry.data.previous,
-            timeSeries: entry.data.timeSeries,
-          })),
-        };
-        console.log(`Pre-warm: Argo data calculated (${argoData.current.zones.length} zones, ${mergedTimeSeries.length} months)`);
-      }
-    } else {
-      console.log('Pre-warm: Argo disabled - skipping calculation');
-    }
-    
-    // Fetch Zero Trust Seats if enabled
-    let zeroTrustSeatsData = null;
-    const ztSeatsAccountIds = config?.zeroTrust?.seats?.accountIds || [];
-    if (config?.zeroTrust?.seats?.enabled && ztSeatsAccountIds.length > 0) {
-      console.log(`Pre-warm: Fetching Zero Trust Seats for ${ztSeatsAccountIds.length} account(s)...`);
-      const seatsConfig = config.zeroTrust.seats;
-      
-      const seatsPromises = ztSeatsAccountIds.map(accountId =>
-        fetchZeroTrustSeatsForAccount(apiKey, accountId, seatsConfig, env)
-          .then(data => ({ accountId, data }))
-      );
-      
-      const seatsResults = await Promise.allSettled(seatsPromises);
-      const seatsData = seatsResults
-        .filter(result => result.status === 'fulfilled' && result.value?.data)
-        .map(result => result.value);
-      
-      if (seatsData.length > 0) {
-        // Merge timeSeries from all accounts
-        const timeSeriesMap = new Map();
-        seatsData.forEach(accountEntry => {
-          if (accountEntry.data.timeSeries) {
-            accountEntry.data.timeSeries.forEach(entry => {
-              const existing = timeSeriesMap.get(entry.month);
-              if (existing) {
-                existing.seats += entry.seats || 0;
-              } else {
-                timeSeriesMap.set(entry.month, {
-                  month: entry.month,
-                  timestamp: entry.timestamp,
-                  seats: entry.seats || 0,
-                });
-              }
-            });
-          }
-        });
-
-        const mergedTimeSeries = Array.from(timeSeriesMap.values())
-          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
-        zeroTrustSeatsData = {
-          enabled: true,
-          threshold: seatsConfig.threshold,
-          current: {
-            seats: seatsData.reduce((sum, entry) => sum + entry.data.current.seats, 0),
-          },
-          previous: {
-            seats: seatsData.reduce((sum, entry) => sum + entry.data.previous.seats, 0),
-          },
-          timeSeries: mergedTimeSeries,
-          perAccountData: seatsData.map(entry => ({
-            accountId: entry.accountId,
-            current: entry.data.current,
-            previous: entry.data.previous,
-            timeSeries: entry.data.timeSeries,
-          })),
-        };
-        console.log(`Pre-warm: Zero Trust Seats fetched (${zeroTrustSeatsData.current.seats} current, ${zeroTrustSeatsData.previous.seats} previous)`);
-      }
-    } else {
-      console.log('Pre-warm: Zero Trust Seats disabled - skipping fetch');
-    }
-    
-    // Fetch Workers & Pages if enabled
-    let workersPagesData = null;
-    const wpAccountIds = config?.developerServices?.workersPages?.accountIds || [];
-    if (config?.developerServices?.workersPages?.enabled && wpAccountIds.length > 0) {
-      console.log(`Pre-warm: Fetching Workers & Pages for ${wpAccountIds.length} account(s)...`);
-      const wpConfig = config.developerServices.workersPages;
-      
-      const wpPromises = wpAccountIds.map(accountId =>
-        fetchWorkersPagesForAccount(apiKey, accountId, wpConfig, env)
-          .then(data => ({ accountId, data }))
-      );
-      
-      const wpResults = await Promise.allSettled(wpPromises);
-      const wpData = wpResults
-        .filter(result => result.status === 'fulfilled' && result.value?.data)
-        .map(result => result.value);
-      
-      if (wpData.length > 0) {
-        // Merge timeSeries from all accounts
-        const timeSeriesMap = new Map();
-        wpData.forEach(accountEntry => {
-          if (accountEntry.data.timeSeries) {
-            accountEntry.data.timeSeries.forEach(entry => {
-              const existing = timeSeriesMap.get(entry.month);
-              if (existing) {
-                existing.requests += entry.requests || 0;
-                existing.cpuTimeMs += entry.cpuTimeMs || 0;
-              } else {
-                timeSeriesMap.set(entry.month, {
-                  month: entry.month,
-                  timestamp: entry.timestamp,
-                  requests: entry.requests || 0,
-                  cpuTimeMs: entry.cpuTimeMs || 0,
-                });
-              }
-            });
-          }
-        });
-
-        const mergedTimeSeries = Array.from(timeSeriesMap.values())
-          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
-        const wpConfidenceAgg = wpData.reduce((agg, entry) => {
-          const conf = entry.data.current.confidence;
-          if (conf) {
-            agg.estimate += conf.estimate || 0;
-            agg.lower += conf.lower || 0;
-            agg.upper += conf.upper || 0;
-            agg.sampleSize += conf.sampleSize || 0;
-            agg.hasData = true;
-          }
-          return agg;
-        }, { estimate: 0, lower: 0, upper: 0, sampleSize: 0, hasData: false });
-
-        let wpConfidence = null;
-        if (wpConfidenceAgg.hasData && wpConfidenceAgg.estimate > 0) {
-          const intervalWidth = wpConfidenceAgg.upper - wpConfidenceAgg.lower;
-          const relativeWidth = intervalWidth / (2 * wpConfidenceAgg.estimate);
-          const confidencePercent = Math.max(0, Math.min(100, 100 * (1 - relativeWidth)));
-          wpConfidence = {
-            percent: Math.round(confidencePercent * 10) / 10,
-            sampleSize: wpConfidenceAgg.sampleSize,
-            estimate: wpConfidenceAgg.estimate,
-            lower: wpConfidenceAgg.lower,
-            upper: wpConfidenceAgg.upper,
-          };
-        }
-
-        workersPagesData = {
-          enabled: true,
-          requestsThreshold: wpConfig.requestsThreshold,
-          cpuTimeThreshold: wpConfig.cpuTimeThreshold,
-          current: {
-            requests: wpData.reduce((sum, entry) => sum + entry.data.current.requests, 0),
-            cpuTimeMs: wpData.reduce((sum, entry) => sum + entry.data.current.cpuTimeMs, 0),
-            confidence: wpConfidence,
-          },
-          previous: {
-            requests: wpData.reduce((sum, entry) => sum + entry.data.previous.requests, 0),
-            cpuTimeMs: wpData.reduce((sum, entry) => sum + entry.data.previous.cpuTimeMs, 0),
-          },
-          timeSeries: mergedTimeSeries,
-          perAccountData: wpData.map(entry => ({
-            accountId: entry.accountId,
-            current: entry.data.current,
-            previous: entry.data.previous,
-            timeSeries: entry.data.timeSeries,
-          })),
-        };
-        console.log(`Pre-warm: Workers & Pages fetched (${workersPagesData.current.requests.toLocaleString()} requests${wpConfidence ? `, confidence: ${wpConfidence.percent}%` : ''})`);
-      }
-    } else {
-      console.log('Pre-warm: Workers & Pages disabled - skipping fetch');
-    }
-    
-    // Fetch R2 Storage if enabled
-    let r2StorageData = null;
-    const r2AccountIds = config?.developerServices?.r2Storage?.accountIds || [];
-    if (config?.developerServices?.r2Storage?.enabled && r2AccountIds.length > 0) {
-      console.log(`Pre-warm: Fetching R2 Storage for ${r2AccountIds.length} account(s)...`);
-      const r2Config = config.developerServices.r2Storage;
-      
-      const r2Results = await Promise.allSettled(
-        r2AccountIds.map(accountId =>
-          fetchR2StorageForAccount(apiKey, accountId, r2Config, env)
-            .then(data => ({ accountId, data }))
-        )
-      );
-      
-      const r2Data = r2Results
-        .filter(r => r.status === 'fulfilled' && r.value?.data)
-        .map(r => r.value);
-      
-      if (r2Data.length > 0) {
-        const timeSeriesMap = new Map();
-        r2Data.forEach(accountEntry => {
-          if (accountEntry.data.timeSeries) {
-            accountEntry.data.timeSeries.forEach(entry => {
-              const existing = timeSeriesMap.get(entry.month);
-              if (existing) {
-                existing.classAOps += entry.classAOps || 0;
-                existing.classBOps += entry.classBOps || 0;
-                existing.storageGB += entry.storageGB || 0;
-              } else {
-                timeSeriesMap.set(entry.month, {
-                  month: entry.month,
-                  timestamp: entry.timestamp,
-                  classAOps: entry.classAOps || 0,
-                  classBOps: entry.classBOps || 0,
-                  storageGB: entry.storageGB || 0,
-                });
-              }
-            });
-          }
-        });
-
-        const mergedTimeSeries = Array.from(timeSeriesMap.values())
-          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
-        r2StorageData = {
-          enabled: true,
-          classAOpsThreshold: r2Config.classAOpsThreshold,
-          classBOpsThreshold: r2Config.classBOpsThreshold,
-          storageThreshold: r2Config.storageThreshold,
-          current: {
-            classAOps: r2Data.reduce((sum, entry) => sum + entry.data.current.classAOps, 0),
-            classBOps: r2Data.reduce((sum, entry) => sum + entry.data.current.classBOps, 0),
-            storageGB: r2Data.reduce((sum, entry) => sum + entry.data.current.storageGB, 0),
-          },
-          previous: {
-            classAOps: r2Data.reduce((sum, entry) => sum + entry.data.previous.classAOps, 0),
-            classBOps: r2Data.reduce((sum, entry) => sum + entry.data.previous.classBOps, 0),
-            storageGB: r2Data.reduce((sum, entry) => sum + entry.data.previous.storageGB, 0),
-          },
-          timeSeries: mergedTimeSeries,
-          perAccountData: r2Data.map(entry => ({
-            accountId: entry.accountId,
-            current: entry.data.current,
-            previous: entry.data.previous,
-            timeSeries: entry.data.timeSeries,
-          })),
-        };
-        console.log(`Pre-warm: R2 Storage fetched (${r2StorageData.current.classAOps.toLocaleString()} Class A ops)`);
-      }
-    } else {
-      console.log('Pre-warm: R2 Storage disabled - skipping fetch');
-    }
-
-    // Fetch D1 if enabled
-    let d1Data = null;
-    const d1AccountIds = config?.developerServices?.d1?.accountIds || [];
-    if (config?.developerServices?.d1?.enabled && d1AccountIds.length > 0) {
-      console.log(`Pre-warm: Fetching D1 for ${d1AccountIds.length} account(s)...`);
-      const d1Config = config.developerServices.d1;
-
-      const d1Results = await Promise.allSettled(
-        d1AccountIds.map(accountId =>
-          fetchD1ForAccount(apiKey, accountId, d1Config, env)
-            .then(data => ({ accountId, data }))
-        )
-      );
-
-      const successfulD1Results = d1Results
-        .filter(r => r.status === 'fulfilled' && r.value?.data)
-        .map(r => r.value);
-
-      if (successfulD1Results.length > 0) {
-        const timeSeriesMap = new Map();
-        successfulD1Results.forEach(accountEntry => {
-          if (accountEntry.data.timeSeries) {
-            accountEntry.data.timeSeries.forEach(entry => {
-              const existing = timeSeriesMap.get(entry.month);
-              if (existing) {
-                existing.rowsRead += entry.rowsRead || 0;
-                existing.rowsWritten += entry.rowsWritten || 0;
-                existing.storageMB += entry.storageMB || 0;
-              } else {
-                timeSeriesMap.set(entry.month, {
-                  month: entry.month,
-                  timestamp: entry.timestamp,
-                  rowsRead: entry.rowsRead || 0,
-                  rowsWritten: entry.rowsWritten || 0,
-                  storageMB: entry.storageMB || 0,
-                });
-              }
-            });
-          }
-        });
-
-        const mergedTimeSeries = Array.from(timeSeriesMap.values())
-          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
-        d1Data = {
-          enabled: true,
-          rowsReadThreshold: d1Config.rowsReadThreshold,
-          rowsWrittenThreshold: d1Config.rowsWrittenThreshold,
-          storageThreshold: d1Config.storageThreshold,
-          current: {
-            rowsRead: successfulD1Results.reduce((sum, entry) => sum + (entry.data.current?.rowsRead || 0), 0),
-            rowsWritten: successfulD1Results.reduce((sum, entry) => sum + (entry.data.current?.rowsWritten || 0), 0),
-            storageMB: successfulD1Results.reduce((sum, entry) => sum + (entry.data.current?.storageMB || 0), 0),
-          },
-          previous: {
-            rowsRead: successfulD1Results.reduce((sum, entry) => sum + (entry.data.previous?.rowsRead || 0), 0),
-            rowsWritten: successfulD1Results.reduce((sum, entry) => sum + (entry.data.previous?.rowsWritten || 0), 0),
-            storageMB: successfulD1Results.reduce((sum, entry) => sum + (entry.data.previous?.storageMB || 0), 0),
-          },
-          timeSeries: mergedTimeSeries,
-          perAccountData: successfulD1Results.map(entry => ({
-            accountId: entry.accountId,
-            current: entry.data.current,
-            previous: entry.data.previous,
-            timeSeries: entry.data.timeSeries,
-          })),
-        };
-        console.log(`Pre-warm: D1 fetched (${d1Data.current.rowsRead.toLocaleString()} rows read)`);
-      }
-    } else {
-      console.log('Pre-warm: D1 disabled - skipping fetch');
-    }
-
-    // Fetch KV if enabled
-    let kvData = null;
-    const kvAccountIds = config?.developerServices?.kv?.accountIds || [];
-    if (config?.developerServices?.kv?.enabled && kvAccountIds.length > 0) {
-      console.log(`Pre-warm: Fetching KV for ${kvAccountIds.length} account(s)...`);
-      const kvConfig = config.developerServices.kv;
-
-      const kvResults = await Promise.allSettled(
-        kvAccountIds.map(accountId =>
-          fetchKVForAccount(apiKey, accountId, kvConfig, env)
-            .then(data => ({ accountId, data }))
-        )
-      );
-
-      const successfulKV = kvResults
-        .filter(r => r.status === 'fulfilled' && r.value.data)
-        .map(r => r.value);
-
-      if (successfulKV.length > 0) {
-        const timeSeriesMap = new Map();
-        successfulKV.forEach(entry => {
-          entry.data.timeSeries.forEach(ts => {
-            const existing = timeSeriesMap.get(ts.month) || { month: ts.month, timestamp: ts.timestamp, reads: 0, writes: 0, deletes: 0, lists: 0, storageMB: 0 };
-            existing.reads += ts.reads || 0;
-            existing.writes += ts.writes || 0;
-            existing.deletes += ts.deletes || 0;
-            existing.lists += ts.lists || 0;
-            existing.storageMB += ts.storageMB || 0;
-            timeSeriesMap.set(ts.month, existing);
-          });
-        });
-        const mergedTimeSeries = Array.from(timeSeriesMap.values())
-          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
-        kvData = {
-          enabled: true,
-          readsThreshold: kvConfig.readsThreshold,
-          writesThreshold: kvConfig.writesThreshold,
-          deletesThreshold: kvConfig.deletesThreshold,
-          listsThreshold: kvConfig.listsThreshold,
-          storageThreshold: kvConfig.storageThreshold,
-          current: {
-            reads: successfulKV.reduce((sum, e) => sum + (e.data.current.reads || 0), 0),
-            writes: successfulKV.reduce((sum, e) => sum + (e.data.current.writes || 0), 0),
-            deletes: successfulKV.reduce((sum, e) => sum + (e.data.current.deletes || 0), 0),
-            lists: successfulKV.reduce((sum, e) => sum + (e.data.current.lists || 0), 0),
-            storageMB: successfulKV.reduce((sum, e) => sum + (e.data.current.storageMB || 0), 0),
-          },
-          previous: {
-            reads: successfulKV.reduce((sum, e) => sum + (e.data.previous.reads || 0), 0),
-            writes: successfulKV.reduce((sum, e) => sum + (e.data.previous.writes || 0), 0),
-            deletes: successfulKV.reduce((sum, e) => sum + (e.data.previous.deletes || 0), 0),
-            lists: successfulKV.reduce((sum, e) => sum + (e.data.previous.lists || 0), 0),
-            storageMB: successfulKV.reduce((sum, e) => sum + (e.data.previous.storageMB || 0), 0),
-          },
-          timeSeries: mergedTimeSeries,
-          perAccountData: successfulKV.map(entry => ({
-            accountId: entry.accountId,
-            current: entry.data.current,
-            previous: entry.data.previous,
-            timeSeries: entry.data.timeSeries,
-          })),
-        };
-        console.log(`Pre-warm: KV fetched (${kvData.current.reads.toLocaleString()} reads)`);
-      }
-    } else {
-      console.log('Pre-warm: KV disabled - skipping fetch');
-    }
-
-    // Fetch Stream if enabled
-    let streamData = null;
-    const streamAccountIds = config?.developerServices?.stream?.accountIds || [];
-    if (config?.developerServices?.stream?.enabled && streamAccountIds.length > 0) {
-      console.log(`Pre-warm: Fetching Stream for ${streamAccountIds.length} account(s)...`);
-      const streamConfig = config.developerServices.stream;
-
-      const streamResults = await Promise.allSettled(
-        streamAccountIds.map(accountId =>
-          fetchStreamForAccount(apiKey, accountId, streamConfig, env)
-            .then(data => ({ accountId, data }))
-        )
-      );
-
-      const successfulStream = streamResults
-        .filter(r => r.status === 'fulfilled' && r.value.data)
-        .map(r => r.value);
-
-      if (successfulStream.length > 0) {
-        const timeSeriesMap = new Map();
-        successfulStream.forEach(entry => {
-          entry.data.timeSeries.forEach(ts => {
-            const existing = timeSeriesMap.get(ts.month) || { month: ts.month, timestamp: ts.timestamp, minutesStored: 0, minutesDelivered: 0 };
-            existing.minutesStored += ts.minutesStored || 0;
-            existing.minutesDelivered += ts.minutesDelivered || 0;
-            timeSeriesMap.set(ts.month, existing);
-          });
-        });
-        const mergedTimeSeries = Array.from(timeSeriesMap.values())
-          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
-        streamData = {
-          enabled: true,
-          minutesStoredThreshold: streamConfig.minutesStoredThreshold,
-          minutesDeliveredThreshold: streamConfig.minutesDeliveredThreshold,
-          current: {
-            minutesStored: successfulStream.reduce((sum, e) => sum + (e.data.current.minutesStored || 0), 0),
-            minutesDelivered: successfulStream.reduce((sum, e) => sum + (e.data.current.minutesDelivered || 0), 0),
-          },
-          previous: {
-            minutesStored: successfulStream.reduce((sum, e) => sum + (e.data.previous.minutesStored || 0), 0),
-            minutesDelivered: successfulStream.reduce((sum, e) => sum + (e.data.previous.minutesDelivered || 0), 0),
-          },
-          timeSeries: mergedTimeSeries,
-          perAccountData: successfulStream.map(entry => ({
-            accountId: entry.accountId,
-            current: entry.data.current,
-            previous: entry.data.previous,
-            timeSeries: entry.data.timeSeries,
-          })),
-        };
-        console.log(`Pre-warm: Stream fetched (${streamData.current.minutesStored.toLocaleString()} min stored, ${streamData.current.minutesDelivered.toLocaleString()} min delivered)`);
-      }
-    } else {
-      console.log('Pre-warm: Stream disabled - skipping fetch');
-    }
-
-    // Fetch Images if enabled
-    let imagesData = null;
-    const imagesAccountIds = config?.developerServices?.images?.accountIds || [];
-    if (config?.developerServices?.images?.enabled && imagesAccountIds.length > 0) {
-      console.log(`Pre-warm: Fetching Images for ${imagesAccountIds.length} account(s)...`);
-      const imagesConfig = config.developerServices.images;
-
-      const imagesResults = await Promise.allSettled(
-        imagesAccountIds.map(accountId =>
-          fetchImagesForAccount(apiKey, accountId, imagesConfig, env)
-            .then(data => ({ accountId, data }))
-        )
-      );
-
-      const successfulImages = imagesResults
-        .filter(r => r.status === 'fulfilled' && r.value.data)
-        .map(r => r.value);
-
-      if (successfulImages.length > 0) {
-        const timeSeriesMap = new Map();
-        successfulImages.forEach(entry => {
-          entry.data.timeSeries.forEach(ts => {
-            const existing = timeSeriesMap.get(ts.month) || { month: ts.month, timestamp: ts.timestamp, imagesStored: 0, imagesDelivered: 0 };
-            existing.imagesStored += ts.imagesStored || 0;
-            existing.imagesDelivered += ts.imagesDelivered || 0;
-            timeSeriesMap.set(ts.month, existing);
-          });
-        });
-        const mergedTimeSeries = Array.from(timeSeriesMap.values())
-          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
-        imagesData = {
-          enabled: true,
-          imagesStoredThreshold: imagesConfig.imagesStoredThreshold,
-          imagesDeliveredThreshold: imagesConfig.imagesDeliveredThreshold,
-          current: {
-            imagesStored: successfulImages.reduce((sum, e) => sum + (e.data.current.imagesStored || 0), 0),
-            imagesDelivered: successfulImages.reduce((sum, e) => sum + (e.data.current.imagesDelivered || 0), 0),
-          },
-          previous: {
-            imagesStored: successfulImages.reduce((sum, e) => sum + (e.data.previous.imagesStored || 0), 0),
-            imagesDelivered: successfulImages.reduce((sum, e) => sum + (e.data.previous.imagesDelivered || 0), 0),
-          },
-          timeSeries: mergedTimeSeries,
-          perAccountData: successfulImages.map(entry => ({
-            accountId: entry.accountId,
-            current: entry.data.current,
-            previous: entry.data.previous,
-            timeSeries: entry.data.timeSeries,
-          })),
-        };
-        console.log(`Pre-warm: Images fetched (${imagesData.current.imagesStored.toLocaleString()} stored, ${imagesData.current.imagesDelivered.toLocaleString()} delivered)`);
-      }
-    } else {
-      console.log('Pre-warm: Images disabled - skipping fetch');
-    }
-
-    // Fetch Workers AI if enabled
-    let workersAIData = null;
-    const waiAccountIds = config?.developerServices?.workersAI?.accountIds || [];
-    if (config?.developerServices?.workersAI?.enabled && waiAccountIds.length > 0) {
-      console.log(`Pre-warm: Fetching Workers AI for ${waiAccountIds.length} account(s)...`);
-      const waiConfig = config.developerServices.workersAI;
-
-      const waiResults = await Promise.allSettled(
-        waiAccountIds.map(accountId =>
-          fetchWorkersAIForAccount(apiKey, accountId, waiConfig, env)
-            .then(data => ({ accountId, data }))
-        )
-      );
-
-      const successfulWAI = waiResults
-        .filter(r => r.status === 'fulfilled' && r.value.data)
-        .map(r => r.value);
-
-      if (successfulWAI.length > 0) {
-        const timeSeriesMap = new Map();
-        successfulWAI.forEach(entry => {
-          entry.data.timeSeries.forEach(ts => {
-            const existing = timeSeriesMap.get(ts.month) || { month: ts.month, timestamp: ts.timestamp, neurons: 0 };
-            existing.neurons += ts.neurons || 0;
-            timeSeriesMap.set(ts.month, existing);
-          });
-        });
-        const mergedTimeSeries = Array.from(timeSeriesMap.values())
-          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
-        workersAIData = {
-          enabled: true,
-          neuronsThreshold: waiConfig.neuronsThreshold,
-          current: {
-            neurons: successfulWAI.reduce((sum, e) => sum + (e.data.current.neurons || 0), 0),
-          },
-          previous: {
-            neurons: successfulWAI.reduce((sum, e) => sum + (e.data.previous.neurons || 0), 0),
-          },
-          timeSeries: mergedTimeSeries,
-          perAccountData: successfulWAI.map(entry => ({
-            accountId: entry.accountId,
-            current: entry.data.current,
-            previous: entry.data.previous,
-            timeSeries: entry.data.timeSeries,
-          })),
-        };
-        console.log(`Pre-warm: Workers AI fetched (${workersAIData.current.neurons.toLocaleString()} neurons)`);
-      }
-    } else {
-      console.log('Pre-warm: Workers AI disabled - skipping fetch');
-    }
-
-    // Fetch Queues if enabled
-    let queuesData = null;
-    const queuesAccountIds = config?.developerServices?.queues?.accountIds || [];
-    if (config?.developerServices?.queues?.enabled && queuesAccountIds.length > 0) {
-      console.log(`Pre-warm: Fetching Queues for ${queuesAccountIds.length} account(s)...`);
-      const queuesConfig = config.developerServices.queues;
-
-      const queuesResults = await Promise.allSettled(
-        queuesAccountIds.map(accountId =>
-          fetchQueuesForAccount(apiKey, accountId, queuesConfig, env)
-            .then(data => ({ accountId, data }))
-        )
-      );
-
-      const successfulQueues = queuesResults
-        .filter(r => r.status === 'fulfilled' && r.value.data)
-        .map(r => r.value);
-
-      if (successfulQueues.length > 0) {
-        const timeSeriesMap = new Map();
-        successfulQueues.forEach(entry => {
-          entry.data.timeSeries.forEach(ts => {
-            const existing = timeSeriesMap.get(ts.month) || { month: ts.month, timestamp: ts.timestamp, operations: 0 };
-            existing.operations += ts.operations || 0;
-            timeSeriesMap.set(ts.month, existing);
-          });
-        });
-        const mergedTimeSeries = Array.from(timeSeriesMap.values())
-          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
-        queuesData = {
-          enabled: true,
-          operationsThreshold: queuesConfig.operationsThreshold,
-          current: {
-            operations: successfulQueues.reduce((sum, e) => sum + (e.data.current.operations || 0), 0),
-          },
-          previous: {
-            operations: successfulQueues.reduce((sum, e) => sum + (e.data.previous.operations || 0), 0),
-          },
-          timeSeries: mergedTimeSeries,
-          perAccountData: successfulQueues.map(entry => ({
-            accountId: entry.accountId,
-            current: entry.data.current,
-            previous: entry.data.previous,
-            timeSeries: entry.data.timeSeries,
-          })),
-        };
-        console.log(`Pre-warm: Queues fetched (${queuesData.current.operations.toLocaleString()} operations)`);
-      }
-    } else {
-      console.log('Pre-warm: Queues disabled - skipping fetch');
-    }
-
-    // Fetch Workers Logs & Traces if enabled
-    let workersLogsTracesData = null;
-    const wltAccountIds = config?.developerServices?.workersLogsTraces?.accountIds || [];
-    if (config?.developerServices?.workersLogsTraces?.enabled && wltAccountIds.length > 0) {
-      console.log(`Pre-warm: Fetching Workers Logs & Traces for ${wltAccountIds.length} account(s)...`);
-      const wltConfig = config.developerServices.workersLogsTraces;
-
-      const wltResults = await Promise.allSettled(
-        wltAccountIds.map(accountId =>
-          fetchWorkersLogsTracesForAccount(apiKey, accountId, wltConfig, env)
-            .then(data => ({ accountId, data }))
-        )
-      );
-
-      const successfulWLT = wltResults
-        .filter(r => r.status === 'fulfilled' && r.value.data)
-        .map(r => r.value);
-
-      if (successfulWLT.length > 0) {
-        const timeSeriesMap = new Map();
-        successfulWLT.forEach(entry => {
-          entry.data.timeSeries.forEach(ts => {
-            const existing = timeSeriesMap.get(ts.month) || { month: ts.month, timestamp: ts.timestamp, events: 0 };
-            existing.events += ts.events || 0;
-            timeSeriesMap.set(ts.month, existing);
-          });
-        });
-        const mergedTimeSeries = Array.from(timeSeriesMap.values())
-          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
-        workersLogsTracesData = {
-          enabled: true,
-          eventsThreshold: wltConfig.eventsThreshold,
-          current: {
-            events: successfulWLT.reduce((sum, e) => sum + (e.data.current.events || 0), 0),
-          },
-          previous: {
-            events: successfulWLT.reduce((sum, e) => sum + (e.data.previous.events || 0), 0),
-          },
-          timeSeries: mergedTimeSeries,
-          perAccountData: successfulWLT.map(entry => ({
-            accountId: entry.accountId,
-            current: entry.data.current,
-            previous: entry.data.previous,
-            timeSeries: entry.data.timeSeries,
-          })),
-        };
-        console.log(`Pre-warm: Workers Logs & Traces fetched (${workersLogsTracesData.current.events.toLocaleString()} events)`);
-      }
-    } else {
-      console.log('Pre-warm: Workers Logs & Traces disabled - skipping fetch');
-    }
-
-    // Fetch Spectrum if enabled
-    let spectrumData = null;
-    const spectrumZones = config?.networkServices?.spectrum?.zones || [];
-    if (config?.networkServices?.spectrum?.enabled && spectrumZones.length > 0) {
-      console.log(`Pre-warm: Fetching Spectrum for ${spectrumZones.length} zone(s)...`);
-      const specConfig = config.networkServices.spectrum;
-
-      const specResults = await Promise.allSettled(
-        spectrumZones.map(zoneId =>
-          fetchSpectrumForZone(apiKey, zoneId, specConfig, env)
-            .then(data => ({ zoneId, data }))
-        )
-      );
-
-      const successfulSpec = specResults
-        .filter(r => r.status === 'fulfilled' && r.value.data)
-        .map(r => r.value);
-
-      if (successfulSpec.length > 0) {
-        const timeSeriesMap = new Map();
-        successfulSpec.forEach(entry => {
-          entry.data.timeSeries.forEach(ts => {
-            const existing = timeSeriesMap.get(ts.month) || { month: ts.month, timestamp: ts.timestamp, dataTransfer: 0, p99Concurrent: 0 };
-            existing.dataTransfer += ts.dataTransfer || 0;
-            existing.p99Concurrent = Math.max(existing.p99Concurrent, ts.p99Concurrent || 0);
-            timeSeriesMap.set(ts.month, existing);
-          });
-        });
-        const mergedTimeSeries = Array.from(timeSeriesMap.values())
-          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
-        spectrumData = {
-          enabled: true,
-          dataTransferThreshold: specConfig.dataTransferThreshold,
-          connectionsThreshold: specConfig.connectionsThreshold,
-          current: {
-            dataTransfer: successfulSpec.reduce((sum, e) => sum + (e.data.current.dataTransfer || 0), 0),
-            p99Concurrent: Math.max(...successfulSpec.map(e => e.data.current.p99Concurrent || 0)),
-          },
-          previous: {
-            dataTransfer: successfulSpec.reduce((sum, e) => sum + (e.data.previous.dataTransfer || 0), 0),
-            p99Concurrent: Math.max(...successfulSpec.map(e => e.data.previous.p99Concurrent || 0)),
-          },
-          timeSeries: mergedTimeSeries,
-          perZoneData: successfulSpec.map(entry => ({
-            zoneId: entry.zoneId,
-            current: entry.data.current,
-            previous: entry.data.previous,
-            timeSeries: entry.data.timeSeries,
-          })),
-        };
-        console.log(`Pre-warm: Spectrum fetched (${(spectrumData.current.dataTransfer / (1024*1024*1024)).toFixed(2)} GB transfer, P99 concurrent: ${spectrumData.current.p99Concurrent})`);
-      }
-    } else {
-      console.log('Pre-warm: Spectrum disabled - skipping fetch');
-    }
-
-    // Fetch Cache Reserve if enabled
-    let cacheReserveData = null;
-    const cacheReserveZones = config?.applicationServices?.cacheReserve?.zones || [];
-    if (config?.applicationServices?.cacheReserve?.enabled && cacheReserveZones.length > 0) {
-      console.log(`Pre-warm: Fetching Cache Reserve for ${cacheReserveZones.length} zone(s)...`);
-      const crConfig = config.applicationServices.cacheReserve;
-
-      const zoneNameMap = {};
-      successfulMetrics.forEach(acct => {
-        (acct.zoneBreakdown?.zones || []).forEach(z => {
-          if (z.zoneTag && z.zoneName) zoneNameMap[z.zoneTag] = z.zoneName;
-        });
-      });
-
-      const crResults = await Promise.allSettled(
-        cacheReserveZones.map(zoneId =>
-          fetchCacheReserveForZone(apiKey, zoneId, zoneNameMap[zoneId] || zoneId, env)
-        )
-      );
-
-      const successfulCR = crResults
-        .filter(r => r.status === 'fulfilled' && r.value)
-        .map(r => r.value);
-
-      if (successfulCR.length > 0) {
-        const timeSeriesMap = new Map();
-        successfulCR.forEach(entry => {
-          entry.timeSeries.forEach(ts => {
-            const existing = timeSeriesMap.get(ts.month) || { month: ts.month, timestamp: ts.timestamp, storageGBDays: 0, classAOps: 0, classBOps: 0 };
-            existing.storageGBDays += ts.storageGBDays || 0;
-            existing.classAOps += ts.classAOps || 0;
-            existing.classBOps += ts.classBOps || 0;
-            timeSeriesMap.set(ts.month, existing);
-          });
-        });
-        const mergedTimeSeries = Array.from(timeSeriesMap.values())
-          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
-        const sumField = (field) => successfulCR.reduce((sum, e) => sum + (e.current[field] || 0), 0);
-        const sumPrevField = (field) => successfulCR.reduce((sum, e) => sum + (e.previous[field] || 0), 0);
-
-        cacheReserveData = {
-          enabled: true,
-          storageThreshold: crConfig.storageThreshold,
-          classAOpsThreshold: crConfig.classAOpsThreshold,
-          classBOpsThreshold: crConfig.classBOpsThreshold,
-          current: {
-            storageGBDays: sumField('storageGBDays'),
-            classAOps: sumField('classAOps'),
-            classBOps: sumField('classBOps'),
-            zones: successfulCR.map(e => ({ zoneId: e.zoneId, zoneName: e.zoneName, storageGBDays: e.current.storageGBDays, classAOps: e.current.classAOps, classBOps: e.current.classBOps })),
-          },
-          previous: {
-            storageGBDays: sumPrevField('storageGBDays'),
-            classAOps: sumPrevField('classAOps'),
-            classBOps: sumPrevField('classBOps'),
-            zones: successfulCR.map(e => ({ zoneId: e.zoneId, zoneName: e.zoneName, storageGBDays: e.previous.storageGBDays, classAOps: e.previous.classAOps, classBOps: e.previous.classBOps })),
-          },
-          timeSeries: mergedTimeSeries,
-          perZoneData: successfulCR.map(entry => ({
-            zoneId: entry.zoneId,
-            zoneName: entry.zoneName,
-            current: entry.current,
-            previous: entry.previous,
-            timeSeries: entry.timeSeries,
-          })),
-        };
-        console.log(`Pre-warm: Cache Reserve fetched (storage=${cacheReserveData.current.storageGBDays.toFixed(4)} GB-days, classA=${cacheReserveData.current.classAOps}, classB=${cacheReserveData.current.classBOps})`);
-      }
-    } else {
-      console.log('Pre-warm: Cache Reserve disabled - skipping fetch');
-    }
-
-    // Fetch Load Balancing if enabled
-    let loadBalancingData = null;
-    const lbAccountIds = config?.applicationServices?.loadBalancing?.accountIds || [];
-    if (config?.applicationServices?.loadBalancing?.enabled && lbAccountIds.length > 0) {
-      console.log(`Pre-warm: Fetching Load Balancing for ${lbAccountIds.length} account(s)...`);
-      const lbConfig = config.applicationServices.loadBalancing;
-
-      const lbPromises = lbAccountIds.map(accountId =>
-        fetchLoadBalancingForAccount(apiKey, accountId, env)
-          .then(data => ({ accountId, data }))
-      );
-
-      const lbResults = await Promise.allSettled(lbPromises);
-      const lbData = lbResults
-        .filter(r => r.status === 'fulfilled' && r.value?.data)
-        .map(r => r.value);
-
-      if (lbData.length > 0) {
-        const timeSeriesMap = new Map();
-        lbData.forEach(entry => {
-          if (entry.data.timeSeries) {
-            entry.data.timeSeries.forEach(ts => {
-              const existing = timeSeriesMap.get(ts.month);
-              if (existing) {
-                existing.endpoints += ts.endpoints || 0;
-              } else {
-                timeSeriesMap.set(ts.month, { month: ts.month, timestamp: ts.timestamp, endpoints: ts.endpoints || 0 });
-              }
-            });
-          }
-        });
-        const mergedTimeSeries = Array.from(timeSeriesMap.values())
-          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
-        loadBalancingData = {
-          enabled: true,
-          threshold: lbConfig.threshold,
-          current: {
-            endpoints: lbData.reduce((sum, entry) => sum + entry.data.current.endpoints, 0),
-          },
-          previous: {
-            endpoints: lbData.reduce((sum, entry) => sum + entry.data.previous.endpoints, 0),
-          },
-          timeSeries: mergedTimeSeries,
-          perAccountData: lbData.map(entry => ({
-            accountId: entry.accountId,
-            current: entry.data.current,
-            previous: entry.data.previous,
-            timeSeries: entry.data.timeSeries,
-          })),
-        };
-        console.log(`Pre-warm: Load Balancing fetched (${loadBalancingData.current.endpoints} endpoints)`);
-      }
-    } else {
-      console.log('Pre-warm: Load Balancing disabled - skipping fetch');
-    }
-
-    // Fetch Custom Hostnames if enabled
-    let customHostnamesData = null;
-    const chAccountIds = config?.applicationServices?.customHostnames?.accountIds || [];
-    if (config?.applicationServices?.customHostnames?.enabled && chAccountIds.length > 0) {
-      console.log(`Pre-warm: Fetching Custom Hostnames for ${chAccountIds.length} account(s)...`);
-      const chConfig = config.applicationServices.customHostnames;
-
-      const chPromises = chAccountIds.map(accountId =>
-        fetchCustomHostnamesForAccount(apiKey, accountId, env)
-          .then(data => ({ accountId, data }))
-      );
-
-      const chResults = await Promise.allSettled(chPromises);
-      const chData = chResults
-        .filter(r => r.status === 'fulfilled' && r.value?.data)
-        .map(r => r.value);
-
-      if (chData.length > 0) {
-        const timeSeriesMap = new Map();
-        chData.forEach(entry => {
-          if (entry.data.timeSeries) {
-            entry.data.timeSeries.forEach(ts => {
-              const existing = timeSeriesMap.get(ts.month);
-              if (existing) {
-                existing.hostnames += ts.hostnames || 0;
-              } else {
-                timeSeriesMap.set(ts.month, { month: ts.month, timestamp: ts.timestamp, hostnames: ts.hostnames || 0 });
-              }
-            });
-          }
-        });
-        const mergedTimeSeries = Array.from(timeSeriesMap.values())
-          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
-        customHostnamesData = {
-          enabled: true,
-          threshold: chConfig.threshold,
-          current: {
-            hostnames: chData.reduce((sum, entry) => sum + entry.data.current.hostnames, 0),
-          },
-          previous: {
-            hostnames: chData.reduce((sum, entry) => sum + entry.data.previous.hostnames, 0),
-          },
-          timeSeries: mergedTimeSeries,
-          perAccountData: chData.map(entry => ({
-            accountId: entry.accountId,
-            current: entry.data.current,
-            previous: entry.data.previous,
-            timeSeries: entry.data.timeSeries,
-          })),
-        };
-        console.log(`Pre-warm: Custom Hostnames fetched (${customHostnamesData.current.hostnames} hostnames)`);
-      }
-    } else {
-      console.log('Pre-warm: Custom Hostnames disabled - skipping fetch');
-    }
-
-    // Fetch Log Explorer if enabled
-    let logExplorerData = null;
-    const leAccountIds = config?.applicationServices?.logExplorer?.accountIds || [];
-    if (config?.applicationServices?.logExplorer?.enabled && leAccountIds.length > 0) {
-      console.log(`Pre-warm: Fetching Log Explorer for ${leAccountIds.length} account(s)...`);
-      const leConfig = config.applicationServices.logExplorer;
-
-      const lePromises = leAccountIds.map(accountId =>
-        fetchLogExplorerForAccount(apiKey, accountId, env)
-          .then(data => ({ accountId, data }))
-      );
-
-      const leResults = await Promise.allSettled(lePromises);
-      const leData = leResults
-        .filter(r => r.status === 'fulfilled' && r.value?.data)
-        .map(r => r.value);
-
-      if (leData.length > 0) {
-        const timeSeriesMap = new Map();
-        leData.forEach(entry => {
-          if (entry.data.timeSeries) {
-            entry.data.timeSeries.forEach(ts => {
-              const existing = timeSeriesMap.get(ts.month);
-              if (existing) {
-                existing.billableGB += ts.billableGB || 0;
-              } else {
-                timeSeriesMap.set(ts.month, { month: ts.month, timestamp: ts.timestamp, billableGB: ts.billableGB || 0 });
-              }
-            });
-          }
-        });
-        const mergedTimeSeries = Array.from(timeSeriesMap.values())
-          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
-        logExplorerData = {
-          enabled: true,
-          threshold: leConfig.threshold,
-          current: {
-            billableGB: leData.reduce((sum, entry) => sum + entry.data.current.billableGB, 0),
-          },
-          previous: {
-            billableGB: leData.reduce((sum, entry) => sum + entry.data.previous.billableGB, 0),
-          },
-          timeSeries: mergedTimeSeries,
-          perAccountData: leData.map(entry => ({
-            accountId: entry.accountId,
-            current: entry.data.current,
-            previous: entry.data.previous,
-            timeSeries: entry.data.timeSeries,
-          })),
-        };
-        console.log(`Pre-warm: Log Explorer fetched (${logExplorerData.current.billableGB.toFixed(2)} GB)`);
-      }
-    } else {
-      console.log('Pre-warm: Log Explorer disabled - skipping fetch');
-    }
-
-    // Fetch Durable Objects if enabled
-    let durableObjectsData = null;
-    const doAccountIds = config?.developerServices?.durableObjects?.accountIds || [];
-    if (config?.developerServices?.durableObjects?.enabled && doAccountIds.length > 0) {
-      console.log(`Pre-warm: Fetching Durable Objects for ${doAccountIds.length} account(s)...`);
-      const doConfig = config.developerServices.durableObjects;
-
-      const doResults = await Promise.allSettled(
-        doAccountIds.map(accountId =>
-          fetchDurableObjectsForAccount(apiKey, accountId, doConfig, env)
-            .then(data => ({ accountId, data }))
-        )
-      );
-
-      const successfulDO = doResults
-        .filter(r => r.status === 'fulfilled' && r.value.data)
-        .map(r => r.value);
-
-      if (successfulDO.length > 0) {
-        const timeSeriesMap = new Map();
-        successfulDO.forEach(entry => {
-          entry.data.timeSeries.forEach(ts => {
-            const existing = timeSeriesMap.get(ts.month) || { month: ts.month, timestamp: ts.timestamp, requests: 0, durationGBs: 0, sqliteRowsRead: 0, sqliteRowsWritten: 0, kvReadUnits: 0, kvWriteUnits: 0, kvDeletes: 0, storageMB: 0 };
-            existing.requests += ts.requests || 0;
-            existing.durationGBs += ts.durationGBs || 0;
-            existing.sqliteRowsRead += ts.sqliteRowsRead || 0;
-            existing.sqliteRowsWritten += ts.sqliteRowsWritten || 0;
-            existing.kvReadUnits += ts.kvReadUnits || 0;
-            existing.kvWriteUnits += ts.kvWriteUnits || 0;
-            existing.kvDeletes += ts.kvDeletes || 0;
-            existing.storageMB += ts.storageMB || 0;
-            timeSeriesMap.set(ts.month, existing);
-          });
-        });
-        const mergedTimeSeries = Array.from(timeSeriesMap.values())
-          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
-        const sumField = (field) => successfulDO.reduce((sum, e) => sum + (e.data.current[field] || 0), 0);
-        const sumPrevField = (field) => successfulDO.reduce((sum, e) => sum + (e.data.previous[field] || 0), 0);
-
-        durableObjectsData = {
-          enabled: true,
-          requestsThreshold: doConfig.requestsThreshold,
-          durationThreshold: doConfig.durationThreshold,
-          sqliteRowsReadThreshold: doConfig.sqliteRowsReadThreshold,
-          sqliteRowsWrittenThreshold: doConfig.sqliteRowsWrittenThreshold,
-          kvReadUnitsThreshold: doConfig.kvReadUnitsThreshold,
-          kvWriteUnitsThreshold: doConfig.kvWriteUnitsThreshold,
-          kvDeletesThreshold: doConfig.kvDeletesThreshold,
-          storageThreshold: doConfig.storageThreshold,
-          current: {
-            requests: sumField('requests'), durationGBs: sumField('durationGBs'),
-            sqliteRowsRead: sumField('sqliteRowsRead'), sqliteRowsWritten: sumField('sqliteRowsWritten'),
-            kvReadUnits: sumField('kvReadUnits'), kvWriteUnits: sumField('kvWriteUnits'),
-            kvDeletes: sumField('kvDeletes'), storageMB: sumField('storageMB'),
-          },
-          previous: {
-            requests: sumPrevField('requests'), durationGBs: sumPrevField('durationGBs'),
-            sqliteRowsRead: sumPrevField('sqliteRowsRead'), sqliteRowsWritten: sumPrevField('sqliteRowsWritten'),
-            kvReadUnits: sumPrevField('kvReadUnits'), kvWriteUnits: sumPrevField('kvWriteUnits'),
-            kvDeletes: sumPrevField('kvDeletes'), storageMB: sumPrevField('storageMB'),
-          },
-          timeSeries: mergedTimeSeries,
-          perAccountData: successfulDO.map(entry => ({
-            accountId: entry.accountId,
-            current: entry.data.current,
-            previous: entry.data.previous,
-            timeSeries: entry.data.timeSeries,
-          })),
-        };
-        console.log(`Pre-warm: DO fetched (${durableObjectsData.current.requests.toLocaleString()} requests)`);
-      }
-    } else {
-      console.log('Pre-warm: Durable Objects disabled - skipping fetch');
-    }
-    
-    // Fetch Magic Transit and Magic WAN in PARALLEL for performance
-    let magicTransitData = null;
-    let magicWanData = null;
-    const mtAccountIds = config?.networkServices?.magicTransit?.accountIds || [];
-    const mwAccountIds = config?.networkServices?.magicWan?.accountIds || [];
-    const mtEnabled = config?.networkServices?.magicTransit?.enabled && mtAccountIds.length > 0;
-    const mwEnabled = config?.networkServices?.magicWan?.enabled && mwAccountIds.length > 0;
-    
-    if (mtEnabled || mwEnabled) {
-      console.log(`Pre-warm: Fetching Magic Transit/WAN in parallel...`);
-      
-      // Build promises for both services
-      const magicPromises = [];
-      
-      if (mtEnabled) {
-        const mtConfig = config.networkServices.magicTransit;
-        const mtPromise = Promise.allSettled(
-          mtAccountIds.map(accountId =>
-            fetchMagicBandwidthForAccount(apiKey, accountId, mtConfig, env, 'magicTransit')
-              .then(data => ({ accountId, data }))
-          )
-        ).then(results => ({
-          type: 'magicTransit',
-          config: mtConfig,
-          data: results.filter(r => r.status === 'fulfilled' && r.value?.data).map(r => r.value)
-        }));
-        magicPromises.push(mtPromise);
-      }
-      
-      if (mwEnabled) {
-        const mwConfig = config.networkServices.magicWan;
-        const mwPromise = Promise.allSettled(
-          mwAccountIds.map(accountId =>
-            fetchMagicBandwidthForAccount(apiKey, accountId, mwConfig, env, 'magicWan')
-              .then(data => ({ accountId, data }))
-          )
-        ).then(results => ({
-          type: 'magicWan',
-          config: mwConfig,
-          data: results.filter(r => r.status === 'fulfilled' && r.value?.data).map(r => r.value)
-        }));
-        magicPromises.push(mwPromise);
-      }
-      
-      // Execute both in parallel
-      const magicResults = await Promise.all(magicPromises);
-      
-      // Process results
-      for (const result of magicResults) {
-        if (result.data.length > 0) {
-          const timeSeriesMap = new Map();
-          result.data.forEach(accountEntry => {
-            if (accountEntry.data.timeSeries) {
-              accountEntry.data.timeSeries.forEach(entry => {
-                const existing = timeSeriesMap.get(entry.month);
-                if (existing) {
-                  existing.p95Mbps += entry.p95Mbps || 0;
-                  existing.ingressP95Mbps += entry.ingressP95Mbps || 0;
-                  existing.egressP95Mbps += entry.egressP95Mbps || 0;
-                } else {
-                  timeSeriesMap.set(entry.month, {
-                    month: entry.month,
-                    timestamp: entry.timestamp,
-                    p95Mbps: entry.p95Mbps || 0,
-                    ingressP95Mbps: entry.ingressP95Mbps || 0,
-                    egressP95Mbps: entry.egressP95Mbps || 0,
-                  });
-                }
-              });
-            }
-          });
-
-          const mergedTimeSeries = Array.from(timeSeriesMap.values())
-            .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
-          // Build current data - always include ingress/egress breakdown
-          const currentData = {
-            p95Mbps: result.data.reduce((sum, entry) => sum + (entry.data.current?.p95Mbps || 0), 0),
-            ingressP95Mbps: result.data.reduce((sum, entry) => sum + (entry.data.current?.ingressP95Mbps || 0), 0),
-            egressP95Mbps: result.data.reduce((sum, entry) => sum + (entry.data.current?.egressP95Mbps || 0), 0),
-          };
-
-          // Build previous data - always include ingress/egress breakdown
-          const previousData = {
-            p95Mbps: result.data.reduce((sum, entry) => sum + (entry.data.previous?.p95Mbps || 0), 0),
-            ingressP95Mbps: result.data.reduce((sum, entry) => sum + (entry.data.previous?.ingressP95Mbps || 0), 0),
-            egressP95Mbps: result.data.reduce((sum, entry) => sum + (entry.data.previous?.egressP95Mbps || 0), 0),
-          };
-
-          const serviceData = {
-            enabled: true,
-            threshold: result.config.threshold,
-            current: currentData,
-            previous: previousData,
-            timeSeries: mergedTimeSeries,
-            perAccountData: result.data.map(entry => ({
-              accountId: entry.accountId,
-              current: entry.data.current,
-              previous: entry.data.previous,
-              timeSeries: entry.data.timeSeries,
-            })),
-          };
-
-          if (result.type === 'magicTransit') {
-            magicTransitData = serviceData;
-            console.log(`Pre-warm: Magic Transit fetched (${magicTransitData.current.p95Mbps} Mbps current)`);
-          } else {
-            magicWanData = serviceData;
-            console.log(`Pre-warm: Magic WAN fetched (${magicWanData.current.p95Mbps} Mbps current)`);
-          }
-        }
-      }
-    } else {
-      console.log('Pre-warm: Magic Transit/WAN disabled - skipping fetch');
-    }
-    
-    // Store in cache with timestamp (only enabled metrics)
-    const cacheKey = `pre-warmed:${accountIds.join(',')}`;
-    const cacheData = {
-      timestamp: Date.now(),
-      data: {
-        ...(coreMetrics || {}),
-        zonesCount: zonesCount,
-        zones: zonesData, // ✅ Include full zones list for instant display
-        ...(botManagementData && { botManagement: botManagementData }),
-        ...(apiShieldData && { apiShield: apiShieldData }),
-        ...(pageShieldData && { pageShield: pageShieldData }),
-        ...(advancedRateLimitingData && { advancedRateLimiting: advancedRateLimitingData }),
-        ...(argoData && { argo: argoData }),
-        ...(cacheReserveData && { cacheReserve: cacheReserveData }),
-        ...(loadBalancingData && { loadBalancing: loadBalancingData }),
-        ...(customHostnamesData && { customHostnames: customHostnamesData }),
-        ...(logExplorerData && { logExplorer: logExplorerData }),
-        ...(zeroTrustSeatsData && { zeroTrustSeats: zeroTrustSeatsData }),
-        ...(workersPagesData && { workersPages: workersPagesData }),
-        ...(r2StorageData && { r2Storage: r2StorageData }),
-        ...(d1Data && { d1: d1Data }),
-        ...(kvData && { kv: kvData }),
-        ...(streamData && { stream: streamData }),
-        ...(imagesData && { images: imagesData }),
-        ...(workersAIData && { workersAI: workersAIData }),
-        ...(queuesData && { queues: queuesData }),
-        ...(workersLogsTracesData && { workersLogsTraces: workersLogsTracesData }),
-        ...(spectrumData && { spectrum: spectrumData }),
-        ...(durableObjectsData && { durableObjects: durableObjectsData }),
-        ...(magicTransitData && { magicTransit: magicTransitData }),
-        ...(magicWanData && { magicWan: magicWanData }),
-      },
-    };
-
-    // Cache for 6 hours (matching cron schedule)
-    await env.CONFIG_KV.put(cacheKey, JSON.stringify(cacheData), {
-      expirationTtl: 6 * 60 * 60, // 6 hours
-    });
-
-    const duration = Date.now() - startTime;
-    console.log(`✅ Pre-warm complete! Cached in ${(duration / 1000).toFixed(1)}s. Next dashboard load will be INSTANT! ⚡`);
-    
+    const prewarmData = await fetchAllMetrics(apiKey, accountIds, config, env);
+    const prewarmCacheKey = `pre-warmed:${accountIds.join(',')}`;
+    await env.CONFIG_KV.put(prewarmCacheKey, JSON.stringify({ timestamp: Date.now(), data: prewarmData }), { expirationTtl: 6 * 60 * 60 });
+    const prewarmDuration = Date.now() - startTime;
+    console.log(`✅ Pre-warm complete! Cached in ${(prewarmDuration / 1000).toFixed(1)}s. Next dashboard load will be INSTANT! ⚡`);
+    return;
   } catch (error) {
     console.error('Pre-warm cache error:', error);
   }
@@ -9891,7 +6906,7 @@ async function runScheduledThresholdCheck(env) {
       const sp = m.spectrum, cfg = netCfg.spectrum||{};
       const spdt = cfg.dataTransferThreshold ? cfg.dataTransferThreshold*1e12 : null;
       a('spectrum-transfer', 'Spectrum — Data Transfer', 'Network Services', sp.current?.dataTransfer||0, spdt, fB(sp.current?.dataTransfer||0), spdt?fB(spdt):'');
-      a('spectrum-conns', 'Spectrum — Connections', 'Network Services', sp.current?.p99Concurrent||0, cfg.connectionsThreshold, fN(sp.current?.p99Concurrent||0), cfg.connectionsThreshold?fN(cfg.connectionsThreshold):'');
+      a('spectrum-conns', 'Spectrum — Connections', 'Network Services', sp.current?.p95Concurrent||0, cfg.connectionsThreshold, fN(sp.current?.p95Concurrent||0), cfg.connectionsThreshold?fN(cfg.connectionsThreshold):'');
     }
 
     const devCfg = config.developerServices || {};
