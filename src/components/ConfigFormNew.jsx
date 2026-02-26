@@ -888,15 +888,15 @@ function ConfigFormNew({ onSave, initialConfig, onCancel, cachedZones }) {
               type="button"
               onClick={handleLoadZones}
               disabled={loadingZones}
-              className="px-5 py-2 bg-slate-600 text-white rounded-lg hover:bg-slate-700 transition-colors flex items-center space-x-2 text-sm disabled:opacity-50"
+              className="px-5 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors flex items-center space-x-2 text-sm disabled:opacity-50"
             >
               <RefreshCw className={`w-4 h-4 ${loadingZones ? 'animate-spin' : ''}`} />
-              <span>{loadingZones ? 'Loading Zones...' : 'Save & Load Zones'}</span>
+              <span>{loadingZones ? 'Fetching Data...' : 'Save & Fetch Data'}</span>
             </button>
             {zonesLoaded && (
               <div className="flex items-center space-x-2 text-green-600 text-sm">
                 <CheckCircle className="w-4 h-4" />
-                <span>{availableZones.length} zones loaded</span>
+                <span>Data loaded ({availableZones.length} zones)</span>
               </div>
             )}
           </div>
@@ -1416,11 +1416,11 @@ function ConfigFormNew({ onSave, initialConfig, onCancel, cachedZones }) {
               {loadingZones ? (
                 <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 text-center">
                   <RefreshCw className="w-5 h-5 text-blue-600 animate-spin mx-auto mb-2" />
-                  <p className="text-sm text-blue-800">Loading zones...</p>
+                  <p className="text-sm text-blue-800">Fetching data...</p>
                 </div>
               ) : availableZones.length === 0 ? (
                 <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 text-center">
-                  <p className="text-sm text-yellow-800">Please save and load zones in Step 1 first.</p>
+                  <p className="text-sm text-yellow-800">Please save and fetch data in Step 1 first.</p>
                 </div>
               ) : (
                 <div className="bg-white border border-gray-300 rounded-lg max-h-60 overflow-y-auto">
@@ -1962,11 +1962,11 @@ function ConfigFormNew({ onSave, initialConfig, onCancel, cachedZones }) {
               {loadingZones ? (
                 <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 text-center">
                   <RefreshCw className="w-5 h-5 text-blue-600 animate-spin mx-auto mb-2" />
-                  <p className="text-sm text-blue-800">Loading zones...</p>
+                  <p className="text-sm text-blue-800">Fetching data...</p>
                 </div>
               ) : availableZones.length === 0 ? (
                 <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 text-center">
-                  <p className="text-sm text-yellow-800">Please save and load zones in Step 1 first.</p>
+                  <p className="text-sm text-yellow-800">Please save and fetch data in Step 1 first.</p>
                 </div>
               ) : (
                 <div className="bg-white border border-gray-300 rounded-lg max-h-60 overflow-y-auto">
@@ -2993,13 +2993,13 @@ function ConfigFormNew({ onSave, initialConfig, onCancel, cachedZones }) {
                     <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 text-center">
                       <RefreshCw className="w-5 h-5 text-blue-600 animate-spin mx-auto mb-2" />
                       <p className="text-sm text-blue-800">
-                        Loading zones from your account...
+                        Fetching data...
                       </p>
                     </div>
                   ) : availableZones.length === 0 ? (
                     <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 text-center">
                       <p className="text-sm text-yellow-800">
-                        Please save and load zones in Step 1 first to select zones for Bot Management.
+                        Please save and fetch data in Step 1 first to select zones for Bot Management.
                       </p>
                     </div>
                   ) : (
@@ -3088,12 +3088,12 @@ function ConfigFormNew({ onSave, initialConfig, onCancel, cachedZones }) {
                   {loadingZones ? (
                     <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 text-center">
                       <RefreshCw className="w-5 h-5 text-blue-600 animate-spin mx-auto mb-2" />
-                      <p className="text-sm text-blue-800">Loading zones...</p>
+                      <p className="text-sm text-blue-800">Fetching data...</p>
                     </div>
                   ) : availableZones.length === 0 ? (
                     <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 text-center">
                       <p className="text-sm text-yellow-800">
-                        Please save and load zones in Step 1 first.
+                        Please save and fetch data in Step 1 first.
                       </p>
                     </div>
                   ) : (
@@ -3182,12 +3182,12 @@ function ConfigFormNew({ onSave, initialConfig, onCancel, cachedZones }) {
                   {loadingZones ? (
                     <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 text-center">
                       <RefreshCw className="w-5 h-5 text-blue-600 animate-spin mx-auto mb-2" />
-                      <p className="text-sm text-blue-800">Loading zones...</p>
+                      <p className="text-sm text-blue-800">Fetching data...</p>
                     </div>
                   ) : availableZones.length === 0 ? (
                     <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 text-center">
                       <p className="text-sm text-yellow-800">
-                        Please save and load zones in Step 1 first.
+                        Please save and fetch data in Step 1 first.
                       </p>
                     </div>
                   ) : (
@@ -3276,12 +3276,12 @@ function ConfigFormNew({ onSave, initialConfig, onCancel, cachedZones }) {
                   {loadingZones ? (
                     <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 text-center">
                       <RefreshCw className="w-5 h-5 text-blue-600 animate-spin mx-auto mb-2" />
-                      <p className="text-sm text-blue-800">Loading zones...</p>
+                      <p className="text-sm text-blue-800">Fetching data...</p>
                     </div>
                   ) : availableZones.length === 0 ? (
                     <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 text-center">
                       <p className="text-sm text-yellow-800">
-                        Please save and load zones in Step 1 first.
+                        Please save and fetch data in Step 1 first.
                       </p>
                     </div>
                   ) : (
