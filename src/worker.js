@@ -2403,7 +2403,7 @@ async function fetchBotManagementForAccount(apiKey, accountId, botManagementConf
   // Aggregate results
   const currentTotal = currentMonthData.reduce((sum, zone) => sum + zone.likelyHuman, 0);
   const previousTotal = previousMonthData.reduce((sum, zone) => sum + zone.likelyHuman, 0);
-  const currentBotTraffic = currentMonthData.reduce((sum, zone) => sum + zone.automated + zone.likelyAutomated, 0);
+  const currentBotTraffic = currentMonthData.reduce((sum, zone) => sum + zone.automated + zone.likelyAutomated + zone.verifiedBot, 0);
   const currentTotalTraffic = currentMonthData.reduce((sum, zone) => sum + zone.likelyHuman + zone.automated + zone.likelyAutomated + zone.verifiedBot, 0);
   
   // Aggregate confidence from all zones

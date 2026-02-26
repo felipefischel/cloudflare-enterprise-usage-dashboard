@@ -2214,7 +2214,7 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
                   {deduplicatedZones.map((zone, index) => {
-                    const botTraffic = (zone.automated || 0) + (zone.likelyAutomated || 0);
+                    const botTraffic = (zone.automated || 0) + (zone.likelyAutomated || 0) + (zone.verifiedBot || 0);
                     return (
                       <tr key={zone.zoneId || index} className="hover:bg-gray-50">
                         <td className="px-6 py-4 whitespace-nowrap">
