@@ -1,6 +1,6 @@
 # Cloudflare Enterprise Usage Dashboard
 
-A real-time dashboard for Cloudflare Enterprise customers to monitor their monthly consumption against contracted limits. Built with Cloudflare Workers, React, and Vite.
+A consumption usage dashboard for Cloudflare Enterprise customers to monitor their monthly consumption against contracted limits. Built with Cloudflare Workers, React, and Vite.
 
 <img width="952" height="1014" alt="Screenshot 2026-02-25 at 19 11 24" src="https://github.com/user-attachments/assets/0b0ead81-de2e-47de-a99c-236d89acbb3b" />
 
@@ -49,7 +49,7 @@ The easiest way to get started is using the **Deploy to Cloudflare** button abov
 1. ✅ **Set your API token** - Paste your Cloudflare API token with "Read all resources" permissions (create one at [API Tokens](https://dash.cloudflare.com/profile/api-tokens))
 2. ✅ **Accept default settings** - The KV namespace and other resources will be created automatically
 
-**The deploy process will automatically:**
+**That's it! The deploy process will automatically:**
 
 1. ✅ Clone the repository to your GitHub account
 2. ✅ Create and configure a KV namespace
