@@ -1,6 +1,6 @@
 # Cloudflare Enterprise Usage Dashboard
 
-A consumption usage dashboard for Cloudflare Enterprise customers to monitor their monthly consumption against contracted limits. Built with Cloudflare Workers, React, and Vite.
+A consumption usage dashboard for Cloudflare Enterprise customers to monitor their monthly consumption against contracted limits. Built using the Cloudflare Developer Platform.
 
 <img width="952" height="1014" alt="Screenshot 2026-02-25 at 19 11 24" src="https://github.com/user-attachments/assets/0b0ead81-de2e-47de-a99c-236d89acbb3b" />
 
