@@ -2,8 +2,6 @@
 
 A consumption usage dashboard for Cloudflare Enterprise customers to monitor their monthly consumption against contracted limits. Built using the Cloudflare Developer Platform.
 
-<img width="952" height="1014" alt="Screenshot 2026-02-25 at 19 11 24" src="https://github.com/user-attachments/assets/0b0ead81-de2e-47de-a99c-236d89acbb3b" />
-
 ## ⚠️ Important Disclaimer
 
 This is NOT an official Cloudflare tool. Official billing data from Cloudflare may vary from the metrics shown here. For authoritative usage information, always rely on official Cloudflare data and invoices.
@@ -11,12 +9,10 @@ This is NOT an official Cloudflare tool. Official billing data from Cloudflare m
 ## Features
 
 - 📊 **Real-time Usage Monitoring**: Track your contracted services:
-  - **Application Services**: Enterprise Zones, HTTP Requests, Data Transfer, DNS, Magic Transit, Bot Management, API Shield, Page Shield, Rate Limiting, Argo, Cache Reserve, Load Balancing, Custom Hostnames, Log Explorer
+  - **Application Services**: Enterprise Zones, HTTP Requests, Data Transfer, DNS, Bot Management, API Shield, Page Shield, Rate Limiting, Argo, Cache Reserve, Load Balancing, Custom Hostnames, Log Explorer
   - **Cloudflare One**: Zero Trust Seats, WAN
-  - **Developer Platform**: Workers & Pages, R2, D1, KV, Stream, Images, Workers AI, Queues, Logs & Traces, Durable Objects, Spectrum
-
-- 🛡️ **Blocked Traffic Excluded**:
-Cloudflare does not charge for traffic blocked by security features (DDoS, WAF, etc.). The HTTP Requests and Data Transfer metrics shown in this dashboard automatically exclude blocked traffic and reflect only billable/clean traffic.
+  - **Network Services**: Magic Transit, Spectrum.
+  - **Developer Platform**: Workers & Pages, R2, D1, KV, Stream, Images, Workers AI, Queues, Logs & Traces, Durable Objects.
 
 - 📈 **Usage Analytics**:
   - Monthly charts with historical trends (data builds over time)
@@ -27,6 +23,8 @@ Cloudflare does not charge for traffic blocked by security features (DDoS, WAF, 
   - Slack notifications when usage reaches 90% of thresholds
   - Automatic monitoring every 6 hours via cron trigger
   - Toggle alerts on/off as needed
+ 
+<img width="952" height="1014" alt="Screenshot 2026-02-25 at 19 11 24" src="https://github.com/user-attachments/assets/0b0ead81-de2e-47de-a99c-236d89acbb3b" />
 
 ## Prerequisites
 
