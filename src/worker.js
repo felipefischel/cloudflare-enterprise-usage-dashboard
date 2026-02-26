@@ -2197,6 +2197,11 @@ async function fetchBotManagementMetrics(apiKey, zoneId, dateStart, dateEnd) {
           { datetime_geq: dateStart },
           { datetime_leq: dateEnd },
           { botManagementDecision_neq: 'other' },
+          { securitySource_neq: 'l7ddos' },
+          { securityAction_neq: 'block' },
+          { securityAction_neq: 'challenge_failed' },
+          { securityAction_neq: 'jschallenge_failed' },
+          { securityAction_neq: 'managed_challenge_failed' },
         ],
       },
       verifiedBotFilter: {
