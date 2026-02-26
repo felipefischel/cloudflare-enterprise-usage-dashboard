@@ -200,12 +200,13 @@ function App() {
               <div>
                 <h3 className="text-lg font-semibold text-gray-900 mb-3">How it works</h3>
                 <p className="text-gray-700 leading-relaxed mb-3">
-                  The dashboard uses <strong>Cloudflare's GraphQL and REST APIs</strong> to query your account's usage data across three product areas:
+                  The dashboard uses <strong>Cloudflare's GraphQL and REST APIs</strong> to query your account's usage data across four product areas:
                 </p>
                 <ul className="list-disc list-inside text-gray-700 space-y-2 ml-4">
-                  <li><strong>Application Services</strong> — Enterprise Zones, HTTP Requests, Data Transfer, DNS, Magic Transit, Bot Management, API Shield, Page Shield, Rate Limiting, Argo, Cache Reserve, Load Balancing, Custom Hostnames, Log Explorer</li>
+                  <li><strong>Application Services</strong> — Enterprise Zones, HTTP Requests, Data Transfer, DNS, Bot Management, API Shield, Page Shield, Rate Limiting, Argo, Cache Reserve, Load Balancing, Custom Hostnames, Log Explorer</li>
                   <li><strong>Cloudflare One</strong> — Zero Trust Seats, WAN</li>
-                  <li><strong>Developer Platform</strong> — Workers & Pages, R2, D1, KV, Stream, Images, Workers AI, Queues, Logs & Traces, Durable Objects, Spectrum</li>
+                  <li><strong>Network Services</strong> — Magic Transit, Spectrum</li>
+                  <li><strong>Developer Platform</strong> — Workers & Pages, R2, D1, KV, Stream, Images, Workers AI, Queues, Logs & Traces, Durable Objects</li>
                 </ul>
               </div>
 

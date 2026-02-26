@@ -164,9 +164,10 @@ Enter your Cloudflare Account ID(s):
 
 Set your contracted limits for **aggregated usage** across all accounts:
 
-- **Application Services**: Enterprise Zones, HTTP Requests, Data Transfer, DNS Queries, Magic Transit (P95 bandwidth), Bot Management, API Shield, Page Shield, Rate Limiting, Argo, Cache Reserve, Load Balancing, Custom Hostnames, Log Explorer
+- **Application Services**: Enterprise Zones, HTTP Requests, Data Transfer, DNS Queries, Bot Management, API Shield, Page Shield, Rate Limiting, Argo, Cache Reserve, Load Balancing, Custom Hostnames, Log Explorer
 - **Cloudflare One**: Zero Trust Seats, WAN (P95 bandwidth)
-- **Developer Platform**: Workers & Pages (requests, CPU time), R2 (operations, storage), D1, KV, Stream, Images, Workers AI, Queues, Logs & Traces, Durable Objects, Spectrum
+- **Network Services**: Magic Transit (P95 bandwidth), Spectrum
+- **Developer Platform**: Workers & Pages (requests, CPU time), R2 (operations, storage), D1, KV, Stream, Images, Workers AI, Queues, Logs & Traces, Durable Objects
 
 Account-level products (Magic Transit, WAN, Zero Trust, Workers & Pages, R2, D1, KV, Stream, Images, Workers AI, Queues, Logs & Traces, Durable Objects) support per-account configuration.
 
