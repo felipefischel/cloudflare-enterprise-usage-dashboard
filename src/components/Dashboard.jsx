@@ -1984,7 +1984,7 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
-                  {zoneData.map((zone, index) => (
+                  {[...zoneData].sort((a, b) => (b.storageGBDays || 0) - (a.storageGBDays || 0)).map((zone, index) => (
                     <tr key={zone.zoneId || index} className="hover:bg-gray-50">
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="text-sm font-medium text-gray-900">{zone.zoneName || zone.zoneId || 'Unknown Zone'}</div>
@@ -2050,7 +2050,7 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
       if (!acc[id]) acc[id] = zone;
       return acc;
     }, {});
-    const deduplicatedZones = Object.values(uniqueZones);
+    const deduplicatedZones = Object.values(uniqueZones).sort((a, b) => (b.bytes || 0) - (a.bytes || 0));
 
     return (
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
@@ -2169,7 +2169,7 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
       if (!acc[id]) acc[id] = zone;
       return acc;
     }, {});
-    const deduplicatedZones = Object.values(uniqueZones);
+    const deduplicatedZones = Object.values(uniqueZones).sort((a, b) => (b.likelyHuman || 0) - (a.likelyHuman || 0));
 
     return (
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
@@ -2339,7 +2339,7 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
       if (!acc[id]) acc[id] = zone;
       return acc;
     }, {});
-    const deduplicatedZones = Object.values(uniqueZones);
+    const deduplicatedZones = Object.values(uniqueZones).sort((a, b) => (b[dataField] || b.requests || b.likelyHuman || 0) - (a[dataField] || a.requests || a.likelyHuman || 0));
 
     return (
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
