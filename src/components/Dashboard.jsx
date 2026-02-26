@@ -1142,7 +1142,7 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
                 </div>
               </div>
               
-              <p className="text-xs text-gray-500 mt-4">This usually takes 20-30 seconds on first setup</p>
+              <p className="text-xs text-gray-500 mt-4">Hold tight — this can take anywhere from 30 seconds to a few minutes depending on how many products need to be fetched</p>
             </>
           ) : (
             <>

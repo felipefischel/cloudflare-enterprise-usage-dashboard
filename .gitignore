@@ -44,7 +44,7 @@ build/
 .cache/
 .temp/
 SKU_IMPLEMENTATION_GUIDE.md
-WIKI.html
+WIKI.*
 
 # AI assistant files
 .windsurfrules
