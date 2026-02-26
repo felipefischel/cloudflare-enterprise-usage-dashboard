@@ -536,7 +536,7 @@ async function fetchAllMetrics(apiKey, accountIds, config, env) {
     const ts = (fields) => mergeTS(ok.flatMap(e => e.data.timeSeries || []), fields);
     const pad2 = (e) => ({ accountId: e.accountId, current: e.data.current, previous: e.data.previous, timeSeries: e.data.timeSeries });
     if (key === 'botManagement') {
-      botManagementData = { enabled: true, threshold: cfg.threshold, current: { likelyHuman: sumC('likelyHuman'), zones: ok.flatMap(e => e.data.current.zones || []), confidence: ok.find(e => e.data.current?.confidence)?.data.current.confidence || null }, previous: { likelyHuman: sumP('likelyHuman'), zones: ok.flatMap(e => e.data.previous.zones || []) }, timeSeries: ts(['likelyHuman']), perAccountData: ok.map(pad2) };
+      botManagementData = { enabled: true, threshold: cfg.threshold, current: { likelyHuman: sumC('likelyHuman'), botTraffic: sumC('botTraffic'), totalTraffic: sumC('totalTraffic'), zones: ok.flatMap(e => e.data.current.zones || []), confidence: ok.find(e => e.data.current?.confidence)?.data.current.confidence || null }, previous: { likelyHuman: sumP('likelyHuman'), zones: ok.flatMap(e => e.data.previous.zones || []) }, timeSeries: ts(['likelyHuman']), perAccountData: ok.map(pad2) };
     } else if (key === 'apiShield' || key === 'pageShield' || key === 'advancedRateLimiting') {
       const out = { enabled: true, threshold: cfg.threshold, current: { requests: sumC('requests'), zones: ok.flatMap(e => e.data.current.zones), confidence: ok.find(e => e.data.current?.confidence)?.data.current.confidence || null }, previous: { requests: sumP('requests'), zones: ok.flatMap(e => e.data.previous.zones) }, timeSeries: ts(['requests']), perAccountData: ok.map(pad2) };
       if (key === 'apiShield') apiShieldData = out; else if (key === 'pageShield') pageShieldData = out; else advancedRateLimitingData = out;
@@ -2403,6 +2403,8 @@ async function fetchBotManagementForAccount(apiKey, accountId, botManagementConf
   // Aggregate results
   const currentTotal = currentMonthData.reduce((sum, zone) => sum + zone.likelyHuman, 0);
   const previousTotal = previousMonthData.reduce((sum, zone) => sum + zone.likelyHuman, 0);
+  const currentBotTraffic = currentMonthData.reduce((sum, zone) => sum + zone.automated + zone.likelyAutomated, 0);
+  const currentTotalTraffic = currentMonthData.reduce((sum, zone) => sum + zone.likelyHuman + zone.automated + zone.likelyAutomated + zone.verifiedBot, 0);
   
   // Aggregate confidence from all zones
   const confidenceData = {
@@ -2504,6 +2506,8 @@ async function fetchBotManagementForAccount(apiKey, accountId, botManagementConf
     threshold: botManagementConfig.threshold || null,
     current: {
       likelyHuman: currentTotal,
+      botTraffic: currentBotTraffic,
+      totalTraffic: currentTotalTraffic,
       zones: zoneBreakdown,
       confidence: aggregatedConfidence ? calculateConfidencePercentage(aggregatedConfidence) : null,
     },

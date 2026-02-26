@@ -1421,7 +1421,7 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
         case 'dns':
           return renderDNS();
         case 'botManagement':
-          return renderAddonProduct('botManagement', 'Bot Management', 'Likely Human Requests', 'likelyHuman', 'traffic', '#f59e0b');
+          return renderBotManagement();
         case 'apiShield':
           return renderAddonProduct('apiShield', 'API Shield', 'HTTP Requests', 'requests', 'requests', '#8b5cf6');
         case 'pageShield':
@@ -2105,6 +2105,130 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
                       </td>
                     </tr>
                   ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  function renderBotManagement() {
+    const product = displayMetrics?.botManagement;
+    if (!product?.enabled) return null;
+
+    const currentVal = product.current?.likelyHuman || 0;
+    const totalTraffic = product.current?.totalTraffic || 0;
+    const botTraffic = product.current?.botTraffic || 0;
+
+    return (
+      <div className="space-y-6">
+        <ConsolidatedCard
+          title="Bot Management"
+          subtitle="Billable Human Requests (Bot Score ≥ 30)"
+          value={currentVal}
+          formatted={formatRequests(currentVal)}
+          threshold={product.threshold}
+          percentage={calculatePercentage(currentVal, product.threshold)}
+          icon="traffic"
+          unit="M"
+          color="#f59e0b"
+          timeSeries={product.timeSeries}
+          dataKey="likelyHuman"
+          chartFormatter={formatRequests}
+          yAxisLabel="Likely Human Requests"
+          confidence={product.current?.confidence}
+          confidenceMetricType="Likely Human Requests"
+          isZoneFiltered={true}
+          summaryBadge={totalTraffic > 0 ? (
+            <div className="bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-xs">
+              <div className="flex items-center justify-between space-x-2 mb-1">
+                <span className="text-gray-600">Total Traffic:</span>
+                <span className="font-semibold text-gray-900">{formatRequests(totalTraffic)}</span>
+              </div>
+              <div className="flex items-center justify-between space-x-2">
+                <span className="text-gray-600">Bot Traffic:</span>
+                <span className="font-semibold text-red-600">{formatRequests(botTraffic)}</span>
+              </div>
+            </div>
+          ) : null}
+        />
+        {renderBotManagementZoneBreakdown()}
+      </div>
+    );
+  }
+
+  function renderBotManagementZoneBreakdown() {
+    const product = displayMetrics?.botManagement;
+    const zoneData = zonesViewMode === 'current' ? product?.current?.zones : product?.previous?.zones;
+    if (!zoneData || zoneData.length === 0) return null;
+
+    const uniqueZones = zoneData.reduce((acc, zone) => {
+      const id = zone.zoneId;
+      if (!acc[id]) acc[id] = zone;
+      return acc;
+    }, {});
+    const deduplicatedZones = Object.values(uniqueZones);
+
+    return (
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
+        <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+          <div>
+            <h3 className="text-lg font-semibold text-gray-900">Bot Management - Breakdown by Zone</h3>
+            <p className="text-sm text-gray-500 mt-1">Usage per zone</p>
+          </div>
+          <div className="flex items-center bg-gray-100 rounded-lg p-1">
+            <button
+              onClick={() => setZonesViewMode('current')}
+              className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                zonesViewMode === 'current'
+                  ? 'bg-blue-600 text-white shadow-sm'
+                  : 'text-gray-600 hover:bg-gray-200'
+              }`}
+            >
+              Current Month
+            </button>
+            <button
+              onClick={() => setZonesViewMode('previous')}
+              className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                zonesViewMode === 'previous'
+                  ? 'bg-blue-600 text-white shadow-sm'
+                  : 'text-gray-600 hover:bg-gray-200'
+              }`}
+            >
+              Previous Month
+            </button>
+          </div>
+        </div>
+        <div className="p-6">
+          <div className="bg-gray-50 border border-gray-200 rounded-lg overflow-hidden">
+            <div className="max-h-96 overflow-y-auto">
+              <table className="min-w-full divide-y divide-gray-200">
+                <thead className="bg-gray-100 sticky top-0 z-10">
+                  <tr>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Zone</th>
+                    <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Likely Human</th>
+                    <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Bot Traffic</th>
+                  </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-200">
+                  {deduplicatedZones.map((zone, index) => {
+                    const botTraffic = (zone.automated || 0) + (zone.likelyAutomated || 0);
+                    return (
+                      <tr key={zone.zoneId || index} className="hover:bg-gray-50">
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <div className="text-sm font-medium text-gray-900">{zone.zoneName || zone.zoneId || 'Unknown Zone'}</div>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-right">
+                          <span className="text-sm font-semibold text-gray-900">{formatRequests(zone.likelyHuman || 0)}</span>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-right">
+                          <span className="text-sm font-semibold text-red-600">{formatRequests(botTraffic)}</span>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
