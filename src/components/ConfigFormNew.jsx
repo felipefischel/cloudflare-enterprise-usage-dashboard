@@ -1438,7 +1438,7 @@ function ConfigFormNew({ onSave, initialConfig, onCancel, cachedZones }) {
     });
   };
 
-  const renderAddonZoneConfig = (addonKey, title, thresholdLabel, toggleZoneFn, toggleAllFn) => {
+  const renderAddonZoneConfig = (addonKey, title, thresholdLabel, toggleZoneFn, toggleAllFn, thresholdSubtitle) => {
     const appServices = formData.applicationServices;
     const addon = appServices[addonKey];
     return (
@@ -1468,7 +1468,7 @@ function ConfigFormNew({ onSave, initialConfig, onCancel, cachedZones }) {
                 onChange={(e) => handleChange('applicationServices', addonKey, { ...addon, threshold: e.target.value })}
                 className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 placeholder="e.g., 1000" min="0" step="0.01" />
-              <p className="text-xs text-gray-500 mt-1">Total contracted across all selected zones</p>
+              <p className="text-xs text-gray-500 mt-1">Total contracted across all selected zones{thresholdSubtitle && <span className="ml-1 text-gray-400">{thresholdSubtitle}</span>}</p>
             </div>
             <div>
               <div className="flex items-center justify-between mb-2">
@@ -1489,7 +1489,7 @@ function ConfigFormNew({ onSave, initialConfig, onCancel, cachedZones }) {
                   <p className="text-sm text-yellow-800">Please save and fetch data in Step 1 first.</p>
                 </div>
               ) : (
-                <div className="bg-white border border-gray-300 rounded-lg max-h-60 overflow-y-auto">
+                <div className="bg-white border border-gray-300 rounded-lg max-h-72 overflow-y-auto">
                   {renderGroupedZoneSelector(addon.zones, toggleZoneFn, (zones) => setFormData(prev => ({ ...prev, applicationServices: { ...prev.applicationServices, [addonKey]: { ...prev.applicationServices[addonKey], zones } } })))}
                 </div>
               )}
@@ -1501,11 +1501,11 @@ function ConfigFormNew({ onSave, initialConfig, onCancel, cachedZones }) {
     );
   };
 
-  const renderBotManagementConfig = () => renderAddonZoneConfig('botManagement', 'Bot Management', 'Contracted Likely Human Requests (Millions)', toggleBotManagementZone, toggleAllBotManagementZones);
-  const renderApiShieldConfig = () => renderAddonZoneConfig('apiShield', 'API Shield', 'Contracted HTTP Requests (Millions)', toggleApiShieldZone, toggleAllApiShieldZones);
-  const renderPageShieldConfig = () => renderAddonZoneConfig('pageShield', 'Page Shield', 'Contracted HTTP Requests (Millions)', togglePageShieldZone, toggleAllPageShieldZones);
-  const renderAdvancedRateLimitingConfig = () => renderAddonZoneConfig('advancedRateLimiting', 'Advanced Rate Limiting', 'Contracted HTTP Requests (Millions)', toggleAdvancedRateLimitingZone, toggleAllAdvancedRateLimitingZones);
-  const renderArgoConfig = () => renderAddonZoneConfig('argo', 'Argo Smart Routing', 'Contracted Data Transfer (TB)', toggleArgoZone, toggleAllArgoZones);
+  const renderBotManagementConfig = () => renderAddonZoneConfig('botManagement', 'Bot Management', 'Contracted Billable Human Requests (Millions)', toggleBotManagementZone, toggleAllBotManagementZones, '(Bot Score ≥ 30)');
+  const renderApiShieldConfig = () => renderAddonZoneConfig('apiShield', 'API Shield', 'Contracted Billable HTTP Requests (Millions)', toggleApiShieldZone, toggleAllApiShieldZones);
+  const renderPageShieldConfig = () => renderAddonZoneConfig('pageShield', 'Page Shield', 'Contracted Billable HTTP Requests (Millions)', togglePageShieldZone, toggleAllPageShieldZones);
+  const renderAdvancedRateLimitingConfig = () => renderAddonZoneConfig('advancedRateLimiting', 'Advanced Rate Limiting', 'Contracted Billable HTTP Requests (Millions)', toggleAdvancedRateLimitingZone, toggleAllAdvancedRateLimitingZones);
+  const renderArgoConfig = () => renderAddonZoneConfig('argo', 'Argo Smart Routing', 'Contracted Billable Data Transfer (TB)', toggleArgoZone, toggleAllArgoZones);
 
   const renderLoadBalancingConfig = () => {
     const lb = formData.applicationServices.loadBalancing;
@@ -1783,7 +1783,7 @@ function ConfigFormNew({ onSave, initialConfig, onCancel, cachedZones }) {
                   </button>
                 )}
               </div>
-              <div className="max-h-48 overflow-y-auto border border-gray-200 rounded-lg">
+              <div className="max-h-60 overflow-y-auto border border-gray-200 rounded-lg">
                 {renderGroupedZoneSelector(cr.zones, toggleCacheReserveZone, (zones) => setFormData(prev => ({ ...prev, applicationServices: { ...prev.applicationServices, cacheReserve: { ...prev.applicationServices.cacheReserve, zones } } })))}
               </div>
               {cr.zones.length > 0 && (
@@ -2016,7 +2016,7 @@ function ConfigFormNew({ onSave, initialConfig, onCancel, cachedZones }) {
                   <p className="text-sm text-yellow-800">Please save and fetch data in Step 1 first.</p>
                 </div>
               ) : (
-                <div className="bg-white border border-gray-300 rounded-lg max-h-60 overflow-y-auto">
+                <div className="bg-white border border-gray-300 rounded-lg max-h-72 overflow-y-auto">
                   {renderGroupedZoneSelector(spec.zones, toggleSpectrumZone, (zones) => setFormData(prev => ({ ...prev, networkServices: { ...prev.networkServices, spectrum: { ...prev.networkServices.spectrum, zones } } })))}
                 </div>
               )}
