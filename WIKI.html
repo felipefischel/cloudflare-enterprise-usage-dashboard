@@ -1,0 +1,1012 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>How I Built the Cloudflare Enterprise Usage Dashboard</title>
+  <style>
+    :root {
+      --bg: #f8fafc;
+      --surface: #ffffff;
+      --text: #1e293b;
+      --text-secondary: #475569;
+      --accent: #2563eb;
+      --accent-light: #dbeafe;
+      --border: #e2e8f0;
+      --code-bg: #1e293b;
+      --code-text: #e2e8f0;
+      --inline-code-bg: #f1f5f9;
+      --table-header: #f1f5f9;
+      --table-border: #e2e8f0;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      color: var(--text);
+      background: var(--bg);
+      line-height: 1.7;
+      font-size: 16px;
+    }
+
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 40px 24px 80px;
+    }
+
+    h1 {
+      font-size: 2.2rem;
+      font-weight: 700;
+      margin-bottom: 12px;
+      color: var(--text);
+      letter-spacing: -0.02em;
+    }
+
+    .meta {
+      color: var(--text-secondary);
+      font-size: 0.95rem;
+      margin-bottom: 40px;
+      line-height: 1.8;
+    }
+
+    h2 {
+      font-size: 1.6rem;
+      font-weight: 700;
+      margin-top: 56px;
+      margin-bottom: 16px;
+      padding-bottom: 8px;
+      border-bottom: 2px solid var(--accent);
+      color: var(--text);
+      letter-spacing: -0.01em;
+    }
+
+    h3 {
+      font-size: 1.25rem;
+      font-weight: 600;
+      margin-top: 36px;
+      margin-bottom: 12px;
+      color: var(--text);
+    }
+
+    h4 {
+      font-size: 1.05rem;
+      font-weight: 600;
+      margin-top: 28px;
+      margin-bottom: 8px;
+      color: var(--text);
+    }
+
+    p {
+      margin-bottom: 16px;
+      color: var(--text);
+    }
+
+    a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+    a:hover { text-decoration: underline; }
+
+    ul, ol {
+      margin-bottom: 16px;
+      padding-left: 28px;
+    }
+    li { margin-bottom: 6px; }
+
+    code {
+      font-family: 'SF Mono', 'Fira Code', 'Fira Mono', Menlo, Consolas, monospace;
+      font-size: 0.88em;
+      background: var(--inline-code-bg);
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+
+    pre {
+      background: var(--code-bg);
+      color: var(--code-text);
+      padding: 20px 24px;
+      border-radius: 8px;
+      overflow-x: auto;
+      margin-bottom: 20px;
+      font-size: 0.88rem;
+      line-height: 1.6;
+    }
+    pre code {
+      background: none;
+      padding: 0;
+      color: inherit;
+      font-size: inherit;
+    }
+
+    blockquote {
+      border-left: 4px solid var(--accent);
+      padding: 12px 20px;
+      margin-bottom: 16px;
+      background: var(--accent-light);
+      border-radius: 0 6px 6px 0;
+    }
+    blockquote p { margin-bottom: 0; }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 24px;
+      font-size: 0.92rem;
+    }
+    th {
+      background: var(--table-header);
+      font-weight: 600;
+      text-align: left;
+      padding: 10px 14px;
+      border: 1px solid var(--table-border);
+    }
+    td {
+      padding: 8px 14px;
+      border: 1px solid var(--table-border);
+      vertical-align: top;
+    }
+    tr:hover td { background: #f8fafc; }
+
+    hr {
+      border: none;
+      border-top: 1px solid var(--border);
+      margin: 48px 0;
+    }
+
+    .toc {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 24px 32px;
+      margin-bottom: 40px;
+    }
+    .toc h2 {
+      margin-top: 0;
+      border-bottom: none;
+      font-size: 1.2rem;
+      padding-bottom: 0;
+      margin-bottom: 12px;
+    }
+    .toc ol { margin-bottom: 0; }
+    .toc li { margin-bottom: 4px; }
+    .toc ul { margin-top: 4px; margin-bottom: 0; list-style: disc; }
+
+    .ascii-diagram {
+      background: var(--code-bg);
+      color: var(--code-text);
+      padding: 20px 24px;
+      border-radius: 8px;
+      overflow-x: auto;
+      margin-bottom: 20px;
+      font-family: 'SF Mono', 'Fira Code', Menlo, Consolas, monospace;
+      font-size: 0.82rem;
+      line-height: 1.4;
+      white-space: pre;
+    }
+
+    strong { font-weight: 600; }
+    em { font-style: italic; }
+
+    .footer {
+      margin-top: 60px;
+      padding-top: 24px;
+      border-top: 1px solid var(--border);
+      color: var(--text-secondary);
+      font-size: 0.9rem;
+      font-style: italic;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+
+    <h1>How I Built the Cloudflare Enterprise Usage Dashboard</h1>
+    <div class="meta">
+      <strong>Author:</strong> Felipe Fischel — Solutions Engineering, Cloudflare<br>
+      <strong>Built with:</strong> Cloudflare Workers, React, Vite, TailwindCSS, KV, Cron Triggers<br>
+      <strong>Status:</strong> Internal tool — not an official Cloudflare product
+    </div>
+
+    <div class="toc">
+      <h2>Table of Contents</h2>
+      <ol>
+        <li><a href="#why-i-built-this">Why I Built This</a></li>
+        <li><a href="#architecture-overview">Architecture Overview</a></li>
+        <li><a href="#supported-products">Supported Products</a></li>
+        <li><a href="#apis-graphql-queries">APIs &amp; GraphQL Queries</a></li>
+        <li><a href="#the-tricky-bits">The Tricky Bits</a>
+          <ul>
+            <li><a href="#billable-vs-total-http-traffic">Billable vs Total HTTP Traffic</a></li>
+            <li><a href="#graphql-adaptive-sampling">GraphQL Adaptive Sampling &amp; Confidence Intervals</a></li>
+            <li><a href="#magic-transit-wan-p95">Magic Transit &amp; WAN — P95 Bandwidth</a></li>
+            <li><a href="#spectrum">Spectrum — Data Transfer &amp; Concurrent Connections</a></li>
+            <li><a href="#cache-reserve">Cache Reserve — Bucket Discovery</a></li>
+            <li><a href="#zone-based-addons">Zone-Based Add-On Products</a></li>
+            <li><a href="#argo-smart-routing">Argo Smart Routing — Bytes Not Requests</a></li>
+          </ul>
+        </li>
+        <li><a href="#cron-jobs">Cron Jobs &amp; KV Caching Strategy</a></li>
+        <li><a href="#pre-warm-cache">The Pre-Warm Cache Pattern</a></li>
+        <li><a href="#historical-data">Historical Data &amp; Monthly Snapshots</a></li>
+        <li><a href="#slack-notifications">Slack Notifications &amp; Threshold Alerts</a></li>
+        <li><a href="#multi-account-aggregation">Multi-Account Aggregation</a></li>
+        <li><a href="#frontend-architecture">Frontend Architecture</a></li>
+        <li><a href="#deployment">Deployment</a></li>
+      </ol>
+    </div>
+
+    <!-- ============================================================ -->
+    <h2 id="why-i-built-this">Why I Built This</h2>
+
+    <p>One of the most common pain points I hear from our Enterprise customers is the <strong>lack of visibility into their contract usage</strong>. As one customer told me: <em>"You are the only vendor where we don't have that visibility."</em></p>
+
+    <p>At the moment, Enterprise customers have two options to understand their consumption:</p>
+
+    <ol>
+      <li><strong>Export logs themselves</strong> and reverse-engineer our billing logic (complex, error-prone, and not feasible for most customers).</li>
+      <li><strong>Rely on their Account Executive</strong> to alert them when usage is approaching thresholds.</li>
+    </ol>
+
+    <p>Option (b) is what most customers end up doing, and it routinely leads to <strong>surprise overages</strong> at the end of the month. The customer doesn't know they're at 95% of their contracted HTTP requests until the AE runs a manual check — often too late to do anything about it.</p>
+
+    <p>I wanted to prove that it's possible to build a self-service dashboard using our own public APIs that gives customers <strong>real-time visibility</strong> into their Enterprise usage across <em>all</em> contracted products — not just HTTP traffic, but Magic Transit, Spectrum, Workers, R2, Zero Trust, and everything in between.</p>
+
+    <p>The goal was simple: <strong>if a customer can see their usage at any time, there are no surprises.</strong></p>
+
+    <h3>What it does</h3>
+
+    <ul>
+      <li>Tracks <strong>30+ metrics</strong> across 4 product areas (Application Services, Cloudflare One, Network Services, Developer Platform)</li>
+      <li>Compares current month-to-date usage against <strong>contracted thresholds</strong></li>
+      <li>Shows <strong>utilization percentages</strong> so customers know if they're at 40% or 90% of their commitment</li>
+      <li>Displays <strong>monthly trend charts</strong> with up to 12 months of historical data</li>
+      <li>Sends <strong>Slack alerts</strong> when any metric hits ≥90% of its threshold</li>
+      <li>Supports <strong>multiple Cloudflare accounts</strong> with per-account breakdowns</li>
+      <li>Runs entirely on the <strong>Cloudflare Developer Platform</strong> (Workers, KV, Cron Triggers) — zero external dependencies</li>
+    </ul>
+
+    <hr>
+
+    <!-- ============================================================ -->
+    <h2 id="architecture-overview">Architecture Overview</h2>
+
+    <p>The dashboard is a single Cloudflare Worker that serves both the API backend and the static React frontend.</p>
+
+    <div class="ascii-diagram">┌─────────────────────────────────────────────────────────┐
+│                  Cloudflare Worker                        │
+│                                                           │
+│  ┌──────────────┐    ┌──────────────────────────────┐    │
+│  │  Static React │    │       API Routes              │    │
+│  │  Frontend     │    │                                │    │
+│  │  (Vite build) │    │  POST /api/metrics/progressive │    │
+│  │              │    │  POST /api/zones               │    │
+│  │  Served via   │    │  GET  /api/config              │    │
+│  │  env.ASSETS   │    │  POST /api/config              │    │
+│  │              │    │  POST /api/webhook/check       │    │
+│  │              │    │  POST /api/cache/prewarm       │    │
+│  └──────────────┘    └──────────────────────────────────┘    │
+│                                                           │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │                  KV Namespace (CONFIG_KV)             │  │
+│  │                                                       │  │
+│  │  config:default          → User settings &amp; thresholds │  │
+│  │  pre-warmed:{ids}        → Full cached dashboard data │  │
+│  │  monthly-stats:{id}:{m}  → Historical monthly data    │  │
+│  │  monthly-*:{id}:{m}      → Per-SKU monthly snapshots  │  │
+│  │  current-month:{id}:...  → Short-lived current cache  │  │
+│  │  alert-sent:{key}:{p}    → Dedup Slack alerts         │  │
+│  └──────────────────────────────────────────────────────┘  │
+│                                                           │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │                  Cron Triggers                        │  │
+│  │                                                       │  │
+│  │  Every 6 hours:  Pre-warm cache + threshold check     │  │
+│  │  Every 1 minute: Spectrum concurrent connection poll   │  │
+│  └──────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+              ┌──────────────────────────┐
+              │  Cloudflare APIs          │
+              │                          │
+              │  GraphQL Analytics API    │
+              │  REST API (v4)           │
+              │  Spectrum Analytics API   │
+              └──────────────────────────┘</div>
+
+    <p><strong>Key design decisions:</strong></p>
+
+    <ul>
+      <li><strong>Single Worker:</strong> The frontend (React + Vite + TailwindCSS) is built to static assets and served via the Worker's <code>ASSETS</code> binding. All API routes share the same Worker. This keeps deployment simple — one <code>wrangler deploy</code> does everything.</li>
+      <li><strong>KV for state:</strong> All configuration, cached data, and historical snapshots live in a single KV namespace (<code>CONFIG_KV</code>). No databases, no Durable Objects needed.</li>
+      <li><strong>API token as Wrangler Secret:</strong> The Cloudflare API token is stored via <code>wrangler secret put CLOUDFLARE_API_TOKEN</code> — never stored in KV or exposed to the frontend. The frontend never touches the API token; all API calls go through the Worker backend.</li>
+      <li><strong>Cron-driven pre-warming:</strong> The dashboard data is fetched on a schedule (every 6 hours) and cached in KV. When a user opens the dashboard, it loads instantly from cache. Manual refreshes re-fetch everything and update the cache.</li>
+    </ul>
+
+    <hr>
+
+    <!-- ============================================================ -->
+    <h2 id="supported-products">Supported Products</h2>
+
+    <p>The dashboard currently supports the following products, organized into 4 product areas:</p>
+
+    <h3>Application Services</h3>
+    <table>
+      <tr><th>Product</th><th>Metric(s)</th><th>API Source</th><th>Level</th></tr>
+      <tr><td>Enterprise Zones</td><td>Zone count</td><td>REST (<code>/zones</code>)</td><td>Account</td></tr>
+      <tr><td>HTTP Requests</td><td>Clean/billable requests</td><td>GraphQL (<code>httpRequestsAdaptiveGroups</code>)</td><td>Zone</td></tr>
+      <tr><td>Data Transfer</td><td>Clean/billable bytes</td><td>GraphQL (<code>httpRequestsAdaptiveGroups</code>)</td><td>Zone</td></tr>
+      <tr><td>DNS</td><td>Query count</td><td>GraphQL (<code>dnsAnalyticsAdaptiveGroups</code>)</td><td>Zone</td></tr>
+      <tr><td>Bot Management</td><td>Likely Human requests (score ≥30)</td><td>GraphQL (<code>httpRequestsAdaptiveGroups</code> with bot score filters)</td><td>Zone</td></tr>
+      <tr><td>API Shield</td><td>Requests on configured zones</td><td>Derived from core HTTP data</td><td>Zone</td></tr>
+      <tr><td>Page Shield</td><td>Requests on configured zones</td><td>Derived from core HTTP data</td><td>Zone</td></tr>
+      <tr><td>Advanced Rate Limiting</td><td>Requests on configured zones</td><td>Derived from core HTTP data</td><td>Zone</td></tr>
+      <tr><td>Argo Smart Routing</td><td>Bytes on configured zones</td><td>Derived from core HTTP data</td><td>Zone</td></tr>
+      <tr><td>Cache Reserve</td><td>Storage (GB-days), Class A &amp; B ops</td><td>GraphQL (<code>cacheReserveStorageAdaptiveGroups</code>, <code>cacheReserveOperationsAdaptiveGroups</code>)</td><td>Zone</td></tr>
+      <tr><td>Load Balancing</td><td>Endpoint count</td><td>REST (<code>/load_balancers/usage</code>)</td><td>Account</td></tr>
+      <tr><td>Custom Hostnames</td><td>Hostname count</td><td>REST (<code>/custom_hostnames/quota</code>)</td><td>Account</td></tr>
+      <tr><td>Log Explorer</td><td>Billable GB ingested</td><td>GraphQL (<code>logExplorerIngestionAdaptiveGroups</code>)</td><td>Account</td></tr>
+    </table>
+
+    <h3>Cloudflare One</h3>
+    <table>
+      <tr><th>Product</th><th>Metric(s)</th><th>API Source</th><th>Level</th></tr>
+      <tr><td>Zero Trust Seats</td><td>Active seat count</td><td>REST (<code>/access/users</code>)</td><td>Account</td></tr>
+      <tr><td>Magic WAN</td><td>P95 bandwidth (Mbps)</td><td>GraphQL (<code>magicTransitTunnelTrafficAdaptiveGroups</code>)</td><td>Account</td></tr>
+    </table>
+
+    <h3>Network Services</h3>
+    <table>
+      <tr><th>Product</th><th>Metric(s)</th><th>API Source</th><th>Level</th></tr>
+      <tr><td>Magic Transit</td><td>P95 bandwidth (Mbps) — ingress + optional egress</td><td>GraphQL (<code>magicTransitTunnelTrafficAdaptiveGroups</code>)</td><td>Account</td></tr>
+      <tr><td>Spectrum</td><td>Data transfer (bytes), P95 concurrent connections</td><td>REST (Spectrum Analytics)</td><td>Zone</td></tr>
+    </table>
+
+    <h3>Developer Platform</h3>
+    <table>
+      <tr><th>Product</th><th>Metric(s)</th><th>API Source</th><th>Level</th></tr>
+      <tr><td>Workers &amp; Pages</td><td>Requests, CPU time (ms)</td><td>GraphQL (<code>workersInvocationsAdaptive</code>, <code>workersOverviewRequestsAdaptiveGroups</code>, <code>pagesFunctionsInvocationsAdaptiveGroups</code>)</td><td>Account</td></tr>
+      <tr><td>R2</td><td>Class A ops, Class B ops, Storage (GB)</td><td>GraphQL (<code>r2StorageAdaptiveGroups</code>, <code>r2OperationsAdaptiveGroups</code>)</td><td>Account</td></tr>
+      <tr><td>D1</td><td>Rows read, Rows written, Storage (MB)</td><td>GraphQL (<code>d1AnalyticsAdaptiveGroups</code>, <code>d1StorageAdaptiveGroups</code>)</td><td>Account</td></tr>
+      <tr><td>KV</td><td>Reads, Writes, Deletes, Lists, Storage (MB)</td><td>GraphQL (Workers KV datasets)</td><td>Account</td></tr>
+      <tr><td>Stream</td><td>Minutes stored, Minutes delivered</td><td>GraphQL (Stream datasets)</td><td>Account</td></tr>
+      <tr><td>Images</td><td>Images stored, Images delivered</td><td>GraphQL (Images datasets)</td><td>Account</td></tr>
+      <tr><td>Workers AI</td><td>Neurons</td><td>GraphQL (Workers AI datasets)</td><td>Account</td></tr>
+      <tr><td>Queues</td><td>Operations</td><td>GraphQL (Queues datasets)</td><td>Account</td></tr>
+      <tr><td>Logs &amp; Traces</td><td>Events</td><td>GraphQL (Workers Observability datasets)</td><td>Account</td></tr>
+      <tr><td>Durable Objects</td><td>Requests, Duration (GB-s), SQLite rows, KV ops, Storage</td><td>GraphQL (Durable Objects datasets)</td><td>Account</td></tr>
+    </table>
+
+    <hr>
+
+    <!-- ============================================================ -->
+    <h2 id="apis-graphql-queries">APIs &amp; GraphQL Queries</h2>
+
+    <p>The dashboard makes calls to two Cloudflare API types:</p>
+
+    <h3>1. GraphQL Analytics API (<code>https://api.cloudflare.com/client/v4/graphql</code>)</h3>
+
+    <p>This is the primary data source for most metrics. Key datasets used:</p>
+
+    <p><strong>Zone-level datasets:</strong></p>
+    <ul>
+      <li><code>httpRequestsAdaptiveGroups</code> — HTTP requests, bytes, with adaptive sampling and confidence intervals</li>
+      <li><code>dnsAnalyticsAdaptiveGroups</code> — DNS query counts</li>
+      <li><code>cacheReserveStorageAdaptiveGroups</code> — Cache Reserve storage (GB-days)</li>
+      <li><code>cacheReserveOperationsAdaptiveGroups</code> — Cache Reserve operations (Class A/B)</li>
+    </ul>
+
+    <p><strong>Account-level datasets:</strong></p>
+    <ul>
+      <li><code>magicTransitTunnelTrafficAdaptiveGroups</code> — Magic Transit / WAN tunnel bandwidth (5-minute bit rates)</li>
+      <li><code>magicTransitNetworkAnalyticsAdaptiveGroups</code> — Used for tunnel classification (source/dest IPs)</li>
+      <li><code>workersInvocationsAdaptive</code> — Workers request counts</li>
+      <li><code>pagesFunctionsInvocationsAdaptiveGroups</code> — Pages Functions request counts</li>
+      <li><code>workersOverviewRequestsAdaptiveGroups</code> — Workers CPU time</li>
+      <li><code>r2StorageAdaptiveGroups</code> / <code>r2OperationsAdaptiveGroups</code> — R2 storage and operations</li>
+      <li><code>d1AnalyticsAdaptiveGroups</code> / <code>d1StorageAdaptiveGroups</code> — D1 rows and storage</li>
+      <li><code>logExplorerIngestionAdaptiveGroups</code> — Log Explorer billable bytes</li>
+    </ul>
+
+    <h3>2. REST API (<code>https://api.cloudflare.com/client/v4/...</code>)</h3>
+
+    <p>Used for metrics not available in GraphQL:</p>
+    <ul>
+      <li><code>GET /zones?per_page=1000</code> — List Enterprise zones</li>
+      <li><code>GET /accounts/{id}</code> — Get account name</li>
+      <li><code>GET /accounts/{id}/access/users?seat_type=any&amp;per_page=1</code> — Zero Trust seat count (uses <code>result_info.total_count</code>)</li>
+      <li><code>GET /accounts/{id}/load_balancers/usage</code> — Load Balancing endpoint count</li>
+      <li><code>GET /zones/{id}/custom_hostnames/quota?ui=true</code> — Custom Hostnames count</li>
+      <li><code>GET /zones/{id}/spectrum/analytics/events/summary</code> — Spectrum data transfer totals</li>
+      <li><code>GET /zones/{id}/spectrum/analytics/aggregate/current</code> — Spectrum real-time concurrent connections</li>
+    </ul>
+
+    <h3>Authentication</h3>
+
+    <p>All API calls use a Bearer token: <code>Authorization: Bearer ${env.CLOUDFLARE_API_TOKEN}</code>. The token needs <strong>"Read all resources"</strong> permissions (the standard "All accounts - Read" template at dash.cloudflare.com/profile/api-tokens).</p>
+
+    <hr>
+
+    <!-- ============================================================ -->
+    <h2 id="the-tricky-bits">The Tricky Bits</h2>
+
+    <h3 id="billable-vs-total-http-traffic">1. Billable vs Total HTTP Traffic</h3>
+
+    <p>This was one of the first and most fundamental design decisions. Cloudflare's Enterprise contracts define "HTTP Requests" as <strong>billable/clean traffic</strong> — meaning traffic that has been blocked or challenged by security features should be excluded.</p>
+
+    <p><strong>The approach:</strong> I run <strong>two separate GraphQL queries</strong> against <code>httpRequestsAdaptiveGroups</code>:</p>
+
+    <p><strong>Query 1 — Clean/Billable traffic</strong> (the number that matters for billing):</p>
+<pre><code>filter: {
+  AND: [
+    { datetime_geq: $start },
+    { datetime_leq: $end },
+    { requestSource: "eyeball" },           // Eyeball traffic only
+    { securitySource_neq: "l7ddos" },       // Exclude L7 DDoS
+    { securityAction_neq: "block" },         // Exclude blocks
+    { securityAction_neq: "challenge_failed" },
+    { securityAction_neq: "jschallenge_failed" },
+    { securityAction_neq: "managed_challenge_failed" }
+  ]
+}</code></pre>
+
+    <p><strong>Query 2 — Total eyeball traffic</strong> (vanity metric, shown as a secondary badge):</p>
+<pre><code>filter: {
+  AND: [
+    { datetime_geq: $start },
+    { datetime_leq: $end },
+    { requestSource: "eyeball" }
+  ]
+}</code></pre>
+
+    <p><strong>Blocked traffic</strong> is derived as: <code>Total - Clean = Blocked</code>. This is displayed in the UI as a small informational badge (e.g., "12.3M blocked") but the <strong>main metric card always shows the clean/billable number</strong>.</p>
+
+    <p><strong>Why not query blocked traffic directly?</strong> Because the security action filters are complex (9+ different actions) and using exclusion filters on a single query is more reliable than trying to enumerate all possible block actions separately.</p>
+
+    <p><strong>Why <code>requestSource: "eyeball"</code>?</strong> This filters to human/browser traffic and excludes internal Cloudflare traffic (like health checks). This aligns with how billing counts requests.</p>
+
+    <h3 id="graphql-adaptive-sampling">2. GraphQL Adaptive Sampling &amp; Confidence Intervals</h3>
+
+    <p>This is perhaps the most underappreciated challenge. Cloudflare's GraphQL Analytics API uses <strong>adaptive sampling</strong> — for high-traffic zones, the API samples a subset of data and extrapolates. This means the numbers you get are <em>estimates</em>, not exact counts.</p>
+
+    <p><strong>The problem:</strong> A customer with 10B requests/month might see the API return 9.7B or 10.3B depending on the sampling rate. If their contract is for 10B, showing 103% utilization when the true number might be 97% would be misleading.</p>
+
+    <p><strong>My solution:</strong> The GraphQL API supports a <code>confidence(level: 0.95)</code> field that returns:</p>
+    <ul>
+      <li><code>estimate</code> — The extrapolated value</li>
+      <li><code>lower</code> / <code>upper</code> — The 95% confidence interval bounds</li>
+      <li><code>sampleSize</code> — How many actual data points were sampled</li>
+    </ul>
+
+    <p>I request confidence intervals for every metric that uses adaptive sampling (HTTP requests, bytes, DNS, bot management, Workers):</p>
+
+<pre><code>totals: httpRequestsAdaptiveGroups(filter: $filter, limit: 1) {
+  count
+  sum { edgeResponseBytes }
+  confidence(level: 0.95) {
+    count {
+      estimate
+      lower
+      upper
+      sampleSize
+    }
+    sum {
+      edgeResponseBytes {
+        estimate
+        lower
+        upper
+        sampleSize
+      }
+    }
+  }
+}</code></pre>
+
+    <p><strong>Confidence percentage calculation:</strong></p>
+<pre><code>const intervalWidth = upper - lower;
+const relativeWidth = intervalWidth / (2 * estimate);
+const confidencePercent = Math.max(0, Math.min(100, 100 * (1 - relativeWidth)));</code></pre>
+
+    <p>This gives a "confidence score" (e.g., 98.5%) that the UI displays as a small badge. If the confidence is below ~95%, it means the data has high sampling variance and the user should interpret the number with care.</p>
+
+    <p><strong>Multi-zone aggregation:</strong> When aggregating confidence across multiple zones, I sum the individual <code>estimate</code>, <code>lower</code>, <code>upper</code>, and <code>sampleSize</code> values and recalculate the confidence percentage on the aggregate. This is statistically valid because confidence intervals for sums can be combined by summing their bounds.</p>
+
+    <h3 id="magic-transit-wan-p95">3. Magic Transit &amp; WAN — P95 Bandwidth</h3>
+
+    <p>This was by far the most complex feature to implement. Magic Transit (MT) and Magic WAN are billed on <strong>P95 bandwidth</strong> — the 95th percentile of 5-minute average bit rates over the billing month. Getting this right required understanding the billing methodology deeply.</p>
+
+    <h4>The Billing Model</h4>
+    <ul>
+      <li><strong>Magic Transit</strong> is billed on <strong>ingress P95</strong> (traffic coming into Cloudflare through GRE/IPsec/CNI tunnels)</li>
+      <li><strong>Magic WAN</strong> is billed on <strong>max(ingress P95, egress P95)</strong> — whichever direction is higher</li>
+    </ul>
+
+    <h4>Billing-Aligned Filters</h4>
+
+    <p>Cloudflare's internal billing system uses specific tunnel filters. I replicated these exactly:</p>
+
+<pre><code>const BILLING_FILTERS = {
+  magicTransit: {
+    ingress: 'direction: "ingress", offRamp_in: ["GRE", "IPsec", "CNI"]',
+    egress:  'direction: "egress", onRamp_in: ["GRE", "IPsec", "CNI"]',
+  },
+  magicWan: {
+    ingress: 'onRamp_in: ["GRE", "IPsec", "CNI"], offRamp_neq: "WARP"',
+    egress:  'egressTunnelName_neq: "", ingressTunnelName_neq: "", onRamp_neq: "WARP", offRamp_neq: "WARP"',
+  },
+};</code></pre>
+
+    <p>Key differences:</p>
+    <ul>
+      <li><strong>MT uses <code>direction</code> filter</strong>; WAN does not</li>
+      <li><strong>WAN excludes WARP traffic</strong> (<code>offRamp_neq: "WARP"</code>) since WARP clients aren't part of the WAN billing model</li>
+      <li><strong>Both use tunnel type filters</strong> (<code>GRE</code>, <code>IPsec</code>, <code>CNI</code>) to match billing</li>
+    </ul>
+
+    <h4>Tunnel Classification: MT vs WAN</h4>
+
+    <p>Here's the tricky part: Magic Transit and Magic WAN share the <strong>same GraphQL dataset</strong> (<code>magicTransitTunnelTrafficAdaptiveGroups</code>). Both products use GRE/IPsec/CNI tunnels, so you can't filter by tunnel type alone.</p>
+
+    <p><strong>How I separate them:</strong> I classify tunnels by their traffic's IP addresses:</p>
+
+    <ol>
+      <li>Query <code>magicTransitNetworkAnalyticsAdaptiveGroups</code> for the last 7 days to see source/destination IPs per tunnel</li>
+      <li>If any traffic on a tunnel uses <strong>private IPs</strong> (RFC 1918: <code>10.x.x.x</code>, <code>172.16-31.x.x</code>, <code>192.168.x.x</code>) → classify as <strong>Magic WAN</strong></li>
+      <li>If all traffic uses <strong>public IPs</strong> → classify as <strong>Magic Transit</strong></li>
+    </ol>
+
+<pre><code>function isPrivateIP(ip) {
+  if (!ip) return false;
+  if (ip.startsWith('10.')) return true;
+  if (ip.startsWith('192.168.')) return true;
+  if (ip.startsWith('172.')) {
+    const second = parseInt(ip.split('.')[1]);
+    if (second >= 16 && second <= 31) return true;
+  }
+  return false;
+}</code></pre>
+
+    <p>This classification is cached for 24 hours and used to filter tunnel data when calculating P95 for each service.</p>
+
+    <h4>Account-Level P95 Calculation</h4>
+
+    <p>The P95 is computed <strong>at the account level</strong>, not per-tunnel:</p>
+
+    <ol>
+      <li>Sum all matching tunnel bit rates per 5-minute interval</li>
+      <li>Zero-fill intervals where no data exists (from month start to now)</li>
+      <li>Sort all samples ascending</li>
+      <li>Take the 95th percentile value</li>
+    </ol>
+
+<pre><code>const calcAccountLevelP95 = (entries, periodStart, periodEnd) => {
+  const totalIntervals = Math.floor((periodEnd - periodStart) / (5 * 60 * 1000));
+  const intervals = {};
+  for (const entry of entries) {
+    const time = entry.dimensions.datetimeFiveMinutes;
+    const bitRate = entry.avg.bitRateFiveMinutes || 0;
+    intervals[time] = (intervals[time] || 0) + bitRate;  // Sum across tunnels
+  }
+  const samples = [];
+  for (let i = 0; i < totalIntervals; i++) {
+    const intervalTime = new Date(periodStart.getTime() + i * 5 * 60 * 1000);
+    samples.push(intervals[intervalTime.toISOString()] || 0);  // Zero-fill
+  }
+  samples.sort((a, b) => a - b);
+  const p95Index = Math.floor(samples.length * 0.95);
+  return samples[Math.min(p95Index, samples.length - 1)];
+};</code></pre>
+
+    <p><strong>Zero-filling is critical.</strong> Without it, the P95 would only consider intervals where traffic exists. If a customer has traffic for 50% of the month, the P95 of only-active-intervals would be much higher than the true billing P95 which includes all the zero-traffic intervals.</p>
+
+    <h4>Time-Windowed Pagination</h4>
+
+    <p>The GraphQL API has a <strong>10,000 row limit</strong> per query. For a full month of 5-minute data across many tunnels, you can easily exceed this. I use <strong>4-day query windows</strong> to stay under the limit while maximizing data density:</p>
+
+<pre><code>const WINDOW_DAYS = 4;
+const fetchWindowedData = async (filterStr, periodStart, periodEnd) => {
+  const windows = [];
+  let windowStart = new Date(periodStart);
+  while (windowStart < periodEnd) {
+    const windowEnd = new Date(Math.min(windowStart + WINDOW_DAYS * 86400000, periodEnd));
+    windows.push({ start: windowStart, end: windowEnd });
+    windowStart = windowEnd;
+  }
+  // Fetch all windows in parallel
+  const results = await Promise.all(windows.map(w => fetchSingleWindow(w)));
+  return results.flat();
+};</code></pre>
+
+    <p>This dramatically improved data coverage from ~60% to 100% for previous month queries where adaptive sampling is more aggressive.</p>
+
+    <h4>Why the End Time is Rounded to the Hour</h4>
+
+<pre><code>const currentMonthEnd = new Date(now);
+currentMonthEnd.setMinutes(0, 0, 0);
+if (now.getMinutes() < 5) {
+  currentMonthEnd.setHours(currentMonthEnd.getHours() - 1);
+}</code></pre>
+
+    <p>The P95 calculation is sensitive to the exact end timestamp. If you query at 14:37 vs 14:38, you might get slightly different results because a 5-minute bucket at 14:35 might not be fully processed yet. Rounding to the last complete hour ensures stable, reproducible results.</p>
+
+    <h3 id="spectrum">4. Spectrum — Data Transfer &amp; Concurrent Connections</h3>
+
+    <p>Spectrum is a Layer 4 (TCP/UDP) proxy product, and it has two separate billing metrics that require completely different approaches.</p>
+
+    <h4>Data Transfer</h4>
+
+    <p>Spectrum data transfer uses the <strong>REST Spectrum Analytics Events API</strong>:</p>
+
+<pre><code>GET /zones/{zoneId}/spectrum/analytics/events/summary
+  ?since={monthStart}&amp;until={now}
+  &amp;metrics=bytesIngress,bytesEgress</code></pre>
+
+    <p>Total data transfer = <code>bytesIngress + bytesEgress</code>.</p>
+
+    <p><strong>The L7 caveat:</strong> Here's a significant gotcha that took me a while to understand. The Spectrum Events API reports <strong>all</strong> traffic through Spectrum hostnames — including HTTP/HTTPS traffic. If a Spectrum application is configured to accept HTTP traffic (which is common), that HTTP traffic is also processed by Cloudflare's CDN at Layer 7 and counted in the regular HTTP Data Transfer metrics.</p>
+
+    <p>This means <strong>HTTP traffic on Spectrum hostnames can be double-counted</strong> — once in Spectrum data transfer and once in HTTP Data Transfer. Cloudflare's internal billing systems can filter by <code>originType</code> to separate TCP/UDP-only traffic from HTTP traffic, but the public Spectrum Analytics API does not expose <code>originType</code>. There's no way to filter this out via the API.</p>
+
+    <p>I added a tooltip disclaimer on the Spectrum Data Transfer card explaining this overlap.</p>
+
+    <p><strong>Caching:</strong> Spectrum data transfer is cached for 6 hours (configurable via <code>SPECTRUM_CACHE_TTL_MS</code>) because the Events API can be slow for zones with high traffic.</p>
+
+    <h4>Concurrent Connections (P95)</h4>
+
+    <p>This is the most architecturally unusual metric in the dashboard. Spectrum concurrent connections are billed on <strong>P95 of per-minute samples over the month</strong>. The problem: there's no historical API for concurrent connections — only a real-time "current connections right now" endpoint.</p>
+
+    <p><strong>The solution: a 1-minute cron job that polls and stores samples.</strong></p>
+
+<pre><code>// Cron trigger: runs every 1 minute
+async function pollSpectrumConcurrent(env) {
+  // For each configured Spectrum zone:
+  const response = await fetch(
+    `https://api.cloudflare.com/client/v4/zones/${zoneId}/spectrum/analytics/aggregate/current`
+  );
+  // Sum connections across all apps in the zone
+  const concurrent = data.result.reduce((sum, app) => sum + (app.connections || 0), 0);
+  // Append to the month's sample array in KV
+  samples.push(concurrent);
+  await env.CONFIG_KV.put(
+    `spectrum-concurrent-samples:${zoneId}:${monthKey}`,
+    JSON.stringify({ samples })
+  );
+}</code></pre>
+
+    <p>At query time, the P95 is calculated with <strong>zero-filling</strong> (same principle as Magic Transit):</p>
+
+<pre><code>function computeP95ZeroFilled(samples, monthStart) {
+  const totalMinutes = Math.max(samples.length, Math.floor((now - monthStart) / 60000));
+  const zeroFilled = [...samples];
+  while (zeroFilled.length < totalMinutes) zeroFilled.push(0);
+  zeroFilled.sort((a, b) => a - b);
+  const index = Math.ceil(zeroFilled.length * 0.95) - 1;
+  return zeroFilled[Math.max(0, index)];
+}</code></pre>
+
+    <p>This means the cron job accumulates ~43,000 samples per month per zone (one per minute). It's the only feature that requires the every-1-minute cron trigger. The cron only runs if Spectrum is enabled in the configuration.</p>
+
+    <h3 id="cache-reserve">5. Cache Reserve — Bucket Discovery</h3>
+
+    <p>Cache Reserve uses a unique 2-step query pattern because of how its data is organized in GraphQL.</p>
+
+    <p><strong>The problem:</strong> Cache Reserve storage data in GraphQL is keyed by <code>bucketName</code>, and querying without a <code>bucketName_like</code> filter returns garbage data due to aggressive sampling. You need to know the bucket name prefix first.</p>
+
+    <p><strong>Step 1 — Discover the bucket prefix:</strong></p>
+
+<pre><code>query discoverBucket($zoneTag: string, $filter: ...) {
+  viewer {
+    zones(filter: {zoneTag: $zoneTag}) {
+      cacheReserveStorageAdaptiveGroups(limit: 1, filter: $filter) {
+        dimensions { bucketName }
+      }
+    }
+  }
+}</code></pre>
+
+    <p>This returns a bucket name like <code>"0-33524435-427189771-88"</code>. Strip the last <code>-{hash}</code> segment to get the prefix: <code>"0-33524435-427189771-%"</code>.</p>
+
+    <p><strong>Step 2 — Query with <code>bucketName_like</code> filter:</strong></p>
+
+<pre><code>cacheReserveStorageAdaptiveGroups(filter: {
+  date_geq: $start,
+  date_leq: $end,
+  bucketName_like: "0-33524435-427189771-%"
+})</code></pre>
+
+    <p>Without this filter, data is inaccurate. With it, data matches the Cloudflare dashboard exactly.</p>
+
+    <p><strong>Operations filter:</strong> Must include <code>actionStatus_in: ["success", "userError"]</code> and classify by action class: <code>"A"</code> (write) and <code>"B"</code> (read).</p>
+
+    <p><strong>Storage metric:</strong> Reported as GB-days (sum of daily storage in GB). The threshold is entered in TB and converted: <code>storageGBDays / (thresholdTB × 1000 × daysInMonth) × 100</code>.</p>
+
+    <h3 id="zone-based-addons">6. Zone-Based Add-On Products</h3>
+
+    <p>API Shield, Page Shield, and Advanced Rate Limiting (ARL) are zone-based add-ons that are billed on HTTP requests to specific zones where the feature is enabled.</p>
+
+    <p><strong>The key insight:</strong> These products don't need their own API queries. Since we already fetch HTTP request data per zone in the core metrics, we can simply <strong>filter the zone breakdown</strong> to the configured zones.</p>
+
+<pre><code>async function calculateZoneBasedAddonForAccount(accountData, addonConfig, env, addonType) {
+  const configuredZones = new Set(addonConfig.zones);
+  const currentZones = accountData.zoneBreakdown.zones
+    .filter(zone => configuredZones.has(zone.zoneTag));
+  const totalRequests = currentZones.reduce((sum, z) => sum + z.requests, 0);
+  return { current: { requests: totalRequests, zones: currentZones }, ... };
+}</code></pre>
+
+    <p>This is efficient because the data is already available — no additional API calls needed. The user just needs to configure which zones have each add-on enabled, and the dashboard filters accordingly.</p>
+
+    <p><strong>Dependency on core metrics:</strong> These add-ons depend on <code>fetchAccountMetrics</code> having already run. If the user disables all core metrics (Enterprise Zones, Traffic, DNS), the zone breakdown data won't exist. The config form shows an amber warning in this case.</p>
+
+    <h3 id="argo-smart-routing">7. Argo Smart Routing — Bytes Not Requests</h3>
+
+    <p>Argo Smart Routing is billed on <strong>bytes transferred</strong>, not requests. This required a separate calculation function because the generic <code>calculateZoneBasedAddonForAccount</code> function only handles requests.</p>
+
+    <p><code>calculateArgoForAccount</code> uses the same zone breakdown data but sums <code>zone.bytes</code> instead of <code>zone.requests</code>.</p>
+
+    <hr>
+
+    <!-- ============================================================ -->
+    <h2 id="cron-jobs">Cron Jobs &amp; KV Caching Strategy</h2>
+
+    <p>The dashboard uses two cron schedules defined in <code>wrangler.toml</code>:</p>
+
+<pre><code>[triggers]
+crons = ["0 */6 * * *", "* * * * *"]</code></pre>
+
+    <h3>Every 6 Hours (<code>0 */6 * * *</code>)</h3>
+
+    <p>Two tasks run in parallel:</p>
+    <ol>
+      <li><strong><code>preWarmCache(env)</code></strong> — Fetches ALL dashboard data for all configured accounts and stores it in KV. This is what makes the dashboard feel "instant" — when a user opens it, the data is already there.</li>
+      <li><strong><code>runScheduledThresholdCheck(env)</code></strong> — Reads the pre-warmed cache, evaluates all SKU metrics against configured thresholds, and sends Slack alerts for any SKU at ≥90%.</li>
+    </ol>
+
+    <h3>Every 1 Minute (<code>* * * * *</code>)</h3>
+
+    <ul>
+      <li><strong><code>pollSpectrumConcurrent(env)</code></strong> — Polls the Spectrum aggregate/current API for each configured zone and appends the connection count to the month's sample array. Only runs if Spectrum is enabled.</li>
+    </ul>
+
+    <hr>
+
+    <!-- ============================================================ -->
+    <h2 id="pre-warm-cache">The Pre-Warm Cache Pattern</h2>
+
+    <p>This is the "secret sauce" for making the dashboard feel fast despite querying 30+ metrics across multiple accounts.</p>
+
+    <h3>The Problem</h3>
+
+    <p>A full data refresh involves:</p>
+    <ul>
+      <li>Listing Enterprise zones (REST call per account)</li>
+      <li>Querying HTTP requests per zone (GraphQL)</li>
+      <li>Querying DNS per zone (GraphQL)</li>
+      <li>Querying each enabled add-on product (10-20 additional API calls)</li>
+      <li>For Magic Transit/WAN: windowed queries across the entire month (8+ GraphQL calls per direction)</li>
+    </ul>
+
+    <p>Total: <strong>50-100+ API calls</strong> that can take 30 seconds to 2+ minutes.</p>
+
+    <h3>The Solution</h3>
+
+    <p>The cron job runs <code>fetchAllMetrics()</code> every 6 hours and stores the complete result in KV:</p>
+
+<pre><code>async function preWarmCache(env) {
+  const prewarmData = await fetchAllMetrics(apiKey, accountIds, config, env);
+  const cacheKey = `pre-warmed:${accountIds.join(',')}`;
+  await env.CONFIG_KV.put(cacheKey, JSON.stringify({
+    timestamp: Date.now(),
+    data: prewarmData,
+  }), { expirationTtl: 6 * 60 * 60 });
+}</code></pre>
+
+    <p>When the frontend requests data via <code>POST /api/metrics/progressive</code>, the Worker first checks for pre-warmed data:</p>
+
+<pre><code>const cachedData = await env.CONFIG_KV.get(cacheKey, 'json');
+if (cachedData &amp;&amp; cacheIsComplete) {
+  return { ...cachedData.data, phase: 'cached', cacheAge: Date.now() - cachedData.timestamp };
+}</code></pre>
+
+    <p><strong>Cache completeness validation:</strong> Before serving cached data, the Worker checks that all <em>enabled</em> products are present in the cache. If a user enables a new product, the cache won't have it yet, so we fall through to a fresh fetch. This prevents showing stale/incomplete data.</p>
+
+    <h3>Wave-Based Fetching</h3>
+
+    <p>When a fresh fetch is needed, <code>fetchAllMetrics()</code> organizes API calls into waves:</p>
+    <ul>
+      <li><strong>Wave 1</strong> (parallel per account): Core zone metrics + account names + zone lists</li>
+      <li><strong>Wave 2</strong> (parallel per product): All enabled add-on products, each per-account</li>
+    </ul>
+
+    <p>This parallelism is critical for performance. Products within Wave 2 don't depend on each other, so they all run simultaneously.</p>
+
+    <hr>
+
+    <!-- ============================================================ -->
+    <h2 id="historical-data">Historical Data &amp; Monthly Snapshots</h2>
+
+    <p>The dashboard shows up to 12 months of historical data in trend charts. This is powered by KV monthly snapshots.</p>
+
+    <h3>How Snapshots Work</h3>
+
+    <ol>
+      <li><strong>End-of-month snapshot (day ≥ 28):</strong> When the current date is the 28th or later, the dashboard caches the current month's data as a permanent monthly snapshot. The first such cache write wins (subsequent runs don't overwrite).</li>
+      <li><strong>Previous month cache (day ≥ 2):</strong> When fetching data, if previous month data isn't in cache, the Worker queries the API for the previous month and permanently caches it (1-year TTL).</li>
+      <li><strong>Time series construction:</strong> Historical snapshots are loaded from KV (<code>list</code> + <code>get</code> per key), the current month's live data is appended, and the result is sorted chronologically.</li>
+    </ol>
+
+    <h3>KV Key Patterns</h3>
+
+    <p>Each product has its own namespace:</p>
+
+    <table>
+      <tr><th>Prefix</th><th>Product</th><th>TTL</th></tr>
+      <tr><td><code>monthly-stats:{accountId}:{YYYY-MM}</code></td><td>Core HTTP/DNS/zones</td><td>1 year</td></tr>
+      <tr><td><code>monthly-bot-stats:{accountId}:{YYYY-MM}</code></td><td>Bot Management</td><td>1 year</td></tr>
+      <tr><td><code>monthly-zt-seats:{accountId}:{YYYY-MM}</code></td><td>Zero Trust Seats</td><td>1 year</td></tr>
+      <tr><td><code>monthly-workers-pages:{accountId}:{YYYY-MM}</code></td><td>Workers &amp; Pages</td><td>1 year</td></tr>
+      <tr><td><code>monthly-r2-storage:{accountId}:{YYYY-MM}</code></td><td>R2 Storage</td><td>1 year</td></tr>
+      <tr><td><code>monthly-d1:{accountId}:{YYYY-MM}</code></td><td>D1</td><td>1 year</td></tr>
+      <tr><td><code>monthly-spectrum:{zoneId}:{YYYY-MM}</code></td><td>Spectrum</td><td>1 year</td></tr>
+      <tr><td><code>monthly-v6-magicTransit:{accountId}:{YYYY-MM}</code></td><td>Magic Transit</td><td>1 year</td></tr>
+      <tr><td><code>monthly-v6-magicWan:{accountId}:{YYYY-MM}</code></td><td>Magic WAN</td><td>1 year</td></tr>
+      <tr><td><code>monthly-cache-reserve:{zoneId}:{YYYY-MM}</code></td><td>Cache Reserve</td><td>1 year</td></tr>
+      <tr><td><code>monthly-load-balancing:{accountId}:{YYYY-MM}</code></td><td>Load Balancing</td><td>1 year</td></tr>
+      <tr><td><code>monthly-custom-hostnames:{accountId}:{YYYY-MM}</code></td><td>Custom Hostnames</td><td>1 year</td></tr>
+      <tr><td><code>monthly-log-explorer:{accountId}:{YYYY-MM}</code></td><td>Log Explorer</td><td>1 year</td></tr>
+      <tr><td><code>monthly-zone-count:{YYYY-MM}</code></td><td>Enterprise Zone count</td><td>1 year</td></tr>
+      <tr><td><code>spectrum-concurrent-samples:{zoneId}:{YYYY-MM}</code></td><td>Spectrum connection samples</td><td>1 year</td></tr>
+    </table>
+
+    <h3>Cache Versioning</h3>
+
+    <p>Magic Transit/WAN cache keys include a version number (currently <code>v6</code> for monthly, <code>v13</code> for current). When the P95 calculation methodology changes, incrementing the version causes a fresh fetch instead of serving stale data from an older algorithm. Historical data functions search both <code>v5</code> and <code>v6</code> prefixes for backward compatibility.</p>
+
+    <hr>
+
+    <!-- ============================================================ -->
+    <h2 id="slack-notifications">Slack Notifications &amp; Threshold Alerts</h2>
+
+    <h3>Alert Flow</h3>
+
+    <ol>
+      <li><strong>Cron runs every 6 hours</strong> → <code>runScheduledThresholdCheck(env)</code></li>
+      <li>Reads pre-warmed cache data</li>
+      <li>For each enabled SKU, calculates: <code>(currentValue / threshold) × 100</code></li>
+      <li>Filters to SKUs at <strong>≥90%</strong> utilization</li>
+      <li><strong>Deduplication:</strong> Checks KV for <code>alert-sent:{accountsKey}:{skuKey}:{periodKey}</code> — if the alert was already sent this period, skip it</li>
+      <li>Sends Slack message via incoming webhook</li>
+    </ol>
+
+    <h3>Alert Deduplication</h3>
+
+    <p>Alerts are sent at most once per period per SKU:</p>
+    <ul>
+      <li><strong>Monthly frequency:</strong> Period key = <code>2025-02</code></li>
+      <li><strong>Weekly frequency:</strong> Period key = <code>2025-W08</code></li>
+    </ul>
+
+    <p>The dedup key expires after 45 days (<code>expirationTtl: 3888000</code>), long enough to cover any billing period.</p>
+
+    <h3>Two Slack Modes</h3>
+
+    <ol>
+      <li><strong>Alert mode (<code>mode='alert'</code>):</strong> Only sends SKUs at ≥90%. Uses yellow for 90-99% and red for ≥100%.</li>
+      <li><strong>Report mode (<code>mode='report'</code>):</strong> Sends a full usage report for all SKUs with traffic light colors (green/yellow/red).</li>
+    </ol>
+
+    <hr>
+
+    <!-- ============================================================ -->
+    <h2 id="multi-account-aggregation">Multi-Account Aggregation</h2>
+
+    <p>Many Enterprise customers have multiple Cloudflare accounts. The dashboard supports aggregating metrics across all configured accounts.</p>
+
+    <h3>How It Works</h3>
+
+    <ol>
+      <li>User configures multiple Account IDs in Settings</li>
+      <li>For each API call, the Worker fetches data for <strong>each account in parallel</strong> using <code>Promise.allSettled()</code></li>
+      <li>Results are aggregated: sums for counts/bytes, merged arrays for zone breakdowns, combined time series</li>
+      <li>The UI allows switching between "All Accounts" view and per-account filtering</li>
+    </ol>
+
+    <h3>Per-Account Filtering</h3>
+
+    <p>Each product returns <code>perAccountData</code> (or <code>perZoneData</code> for zone-level products) alongside the aggregated totals. The frontend uses this to power the account filter dropdown — when a user selects a specific account, it filters to that account's slice of the data.</p>
+
+    <hr>
+
+    <!-- ============================================================ -->
+    <h2 id="frontend-architecture">Frontend Architecture</h2>
+
+    <h3>Tech Stack</h3>
+
+    <ul>
+      <li><strong>React 18</strong> with functional components and hooks</li>
+      <li><strong>Vite</strong> for building (output to <code>./dist</code>, served by Worker's ASSETS binding)</li>
+      <li><strong>TailwindCSS</strong> for styling (slate/blue color scheme)</li>
+      <li><strong>Lucide React</strong> for icons</li>
+    </ul>
+
+    <h3>Component Structure</h3>
+
+<pre><code>src/
+├── App.jsx                         # Router: Dashboard vs Settings vs About
+├── components/
+│   ├── Dashboard.jsx               # Main dashboard with tabs, sidebar, content
+│   ├── ConfigFormNew.jsx           # 3-step settings form
+│   ├── ConsolidatedCard.jsx        # Combined metric + chart component
+│   └── ...
+├── constants/
+│   └── services.js                 # Product category definitions
+└── worker.js                       # Backend (7,000+ lines)</code></pre>
+
+    <h3>Dashboard Layout</h3>
+
+    <p>The dashboard uses a <strong>tab + sidebar</strong> pattern:</p>
+    <ul>
+      <li><strong>3 product area tabs</strong> across the top: Application Services, Cloudflare One, Developer Platform (Network Services products are distributed within these)</li>
+      <li><strong>Left sidebar</strong> (w-64) shows a list of enabled products for the selected tab</li>
+      <li><strong>Right content area</strong> shows <code>ConsolidatedCard</code>(s) for the selected product</li>
+    </ul>
+
+    <h3>ConsolidatedCard</h3>
+
+    <p>This is the main UI component. Each card shows:</p>
+    <ol>
+      <li><strong>Icon + title</strong> (product name)</li>
+      <li><strong>Current value</strong> with "month to date" label</li>
+      <li><strong>Utilization bar</strong> (percentage of threshold, color-coded green/yellow/red)</li>
+      <li><strong>Confidence badge</strong> (if adaptive sampling data is available)</li>
+      <li><strong>Monthly trend chart</strong> (last 12 months from KV snapshots)</li>
+    </ol>
+
+    <p>The <code>icon</code> prop controls both the displayed icon AND how the threshold value is formatted (e.g., <code>"bandwidth"</code> → "X GB", <code>"requests"</code> → "XK requests", <code>"users"</code> → "X seats").</p>
+
+    <h3>Progressive Loading</h3>
+
+    <p>The frontend uses a phased loading approach:</p>
+    <ul>
+      <li><strong>Phase: cached</strong> — If pre-warmed data exists, load instantly</li>
+      <li><strong>Phase 1</strong> — Zone count only (fast, ~1s)</li>
+      <li><strong>Phase 2</strong> — Current month metrics without historical</li>
+      <li><strong>Phase 3</strong> — Full data including historical time series</li>
+    </ul>
+
+    <p>In practice, the cron pre-warm means most page loads hit the cache and display instantly.</p>
+
+    <hr>
+
+    <!-- ============================================================ -->
+    <h2 id="deployment">Deployment</h2>
+
+    <p>The dashboard deploys as a single Cloudflare Worker with static assets.</p>
+
+    <h3>Quick Deploy</h3>
+
+    <p>Use the "Deploy to Cloudflare" button in the README — it handles everything automatically (repo fork, KV namespace creation, Worker deployment, cron setup).</p>
+
+    <h3>Manual Deploy</h3>
+
+<pre><code>npm install
+npm run build
+npx wrangler secret put CLOUDFLARE_API_TOKEN
+npx wrangler deploy</code></pre>
+
+    <h3>Security</h3>
+
+    <ul>
+      <li>The API token is stored as a <strong>Wrangler secret</strong> (encrypted, not visible in dashboard)</li>
+      <li>It's recommended to place the Worker behind <strong>Cloudflare Access</strong> for authentication</li>
+      <li>The frontend never sees or handles the API token — all API calls are proxied through the Worker</li>
+    </ul>
+
+    <div class="footer">
+      <p>This dashboard was built as a personal project to demonstrate what's possible with Cloudflare's public APIs and Developer Platform. It is NOT an official Cloudflare tool. Customers should always refer to their official invoices and Account Managers for authoritative usage information.</p>
+    </div>
+
+  </div>
+</body>
+</html>

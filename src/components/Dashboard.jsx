@@ -1135,24 +1135,10 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
               <p className="text-gray-600 mb-4">Hold tight! We're fetching your account data from Cloudflare.</p>
               
               {/* Progress indicator */}
-              <div className="bg-gray-100 rounded-lg p-4 text-left space-y-2">
+              <div className="bg-gray-100 rounded-lg p-4 text-left">
                 <div className="flex items-center space-x-3">
-                  <div className={`w-2 h-2 rounded-full ${
-                    loadingPhase >= 1 ? 'bg-green-500' : 'bg-gray-300'
-                  }`} />
-                  <span className="text-sm text-gray-700">Counting zones</span>
-                </div>
-                <div className="flex items-center space-x-3">
-                  <div className={`w-2 h-2 rounded-full ${
-                    loadingPhase >= 2 ? 'bg-green-500 animate-pulse' : 'bg-gray-300'
-                  }`} />
-                  <span className="text-sm text-gray-700">Fetching HTTP requests & data transfer</span>
-                </div>
-                <div className="flex items-center space-x-3">
-                  <div className={`w-2 h-2 rounded-full ${
-                    loadingPhase >= 3 ? 'bg-green-500 animate-pulse' : 'bg-gray-300'
-                  }`} />
-                  <span className="text-sm text-gray-700">Loading DNS queries & add-ons</span>
+                  <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+                  <span className="text-sm text-gray-700">Fetching your usage data from Cloudflare</span>
                 </div>
               </div>
               
