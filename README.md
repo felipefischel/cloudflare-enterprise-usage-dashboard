@@ -38,7 +38,7 @@ Cloudflare does not charge for traffic blocked by security features (DDoS, WAF, 
 
 ## Automatic Deployment (Recommended)
 
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/felipefischel/cloudflare-enterprise-usage-dashboard)
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy-tracker.felipe-cloudflare.workers.dev/deploy)
 
 *Tip: Right-click and "Open in new tab" to keep this page open.*
 
