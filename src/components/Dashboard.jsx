@@ -1288,15 +1288,20 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
               </>
             )}
           </div>
-          <button
-            onClick={prewarmCache}
-            disabled={loading || prewarming}
-            className="flex items-center space-x-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-sm text-sm font-medium"
-            title="Fetch fresh data and cache for instant future loads"
-          >
-            <RefreshCw className={`w-4 h-4 ${prewarming ? 'animate-spin' : ''}`} />
-            <span>{prewarming ? 'Refreshing...' : 'Refresh'}</span>
-          </button>
+          <div className="flex flex-col items-end flex-shrink-0">
+            <button
+              onClick={prewarmCache}
+              disabled={loading || prewarming}
+              className="flex items-center space-x-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-sm text-sm font-medium whitespace-nowrap"
+              title="Fetch fresh data and cache for instant future loads"
+            >
+              <RefreshCw className={`w-4 h-4 ${prewarming ? 'animate-spin' : ''}`} />
+              <span>{prewarming ? 'Refreshing...' : 'Refresh'}</span>
+            </button>
+            {prewarming && (
+              <p className="text-[11px] text-gray-400 mt-1.5 max-w-[200px] text-right leading-tight">Hold tight — this typically takes 30s to a couple of minutes.</p>
+            )}
+          </div>
         </div>
       </div>
 
@@ -1742,8 +1747,8 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
               Data Transfer
               <span className="group relative">
                 <Info className="w-3.5 h-3.5 text-gray-400 cursor-help" />
-                <span className="invisible group-hover:visible absolute top-full left-0 mt-2 w-64 p-2.5 bg-gray-900 text-white text-xs rounded-lg shadow-lg z-50 leading-relaxed">
-                  Data transfer is cached for up to 6 hours to optimize refresh performance.
+                <span className="invisible group-hover:visible absolute top-full left-0 mt-2 w-72 p-2.5 bg-gray-900 text-white text-xs rounded-lg shadow-lg z-50 leading-relaxed">
+                  Data transfer is cached for up to 6 hours to optimize refresh performance. Includes all Spectrum ingress + egress bytes. HTTP traffic on Spectrum hostnames is processed by Cloudflare's CDN unless explicitly blocked, so it may be counted both here and in your HTTP Data Transfer.
                 </span>
               </span>
             </span>

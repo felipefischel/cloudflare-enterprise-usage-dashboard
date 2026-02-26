@@ -1,11 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { Save, X, TrendingUp, Key, AlertTriangle, Plus, Trash2, RefreshCw, CheckCircle, ChevronRight } from 'lucide-react';
+import { Save, X, TrendingUp, Key, AlertTriangle, Plus, Trash2, RefreshCw, CheckCircle, ChevronRight, ChevronLeft, Bell } from 'lucide-react';
 import { MessageSquare } from 'lucide-react';
 import { SERVICE_CATEGORIES, SERVICE_METADATA, APPLICATION_SERVICES_SKUS } from '../constants/services';
 
 function ConfigFormNew({ onSave, initialConfig, onCancel, cachedZones }) {
-  // Configuration step: 1 = Account IDs, 2 = Service Thresholds
-  const [configStep, setConfigStep] = useState(initialConfig?.accountIds?.length > 0 ? 2 : 1);
+  // Configuration step: 1 = Account IDs, 2 = Notifications, 3 = Service Thresholds
+  const [configStep, setConfigStep] = useState(initialConfig?.accountIds?.length > 0 ? 3 : 1);
   
   // Active service tab
   const [activeServiceTab, setActiveServiceTab] = useState(SERVICE_CATEGORIES.APPLICATION_SERVICES);
@@ -234,6 +234,7 @@ function ConfigFormNew({ onSave, initialConfig, onCancel, cachedZones }) {
       },
     },
     
+    slackEnabled: !!initialConfig?.slackWebhook,
     slackWebhook: initialConfig?.slackWebhook || '',
     alertFrequency: initialConfig?.alertFrequency || 'monthly',
   });
@@ -565,7 +566,7 @@ function ConfigFormNew({ onSave, initialConfig, onCancel, cachedZones }) {
       setAvailableZones(zonesData.zones || []);
       setAccountNamesMap(zonesData.accounts || {});
       setZonesLoaded(true);
-      setConfigStep(2); // Move to thresholds step
+      setConfigStep(2); // Move to notifications step
     } catch (error) {
       console.error('Error loading zones:', error);
       setErrors({ accountIds: error.message || 'Failed to load zones. Check your Account IDs and API token.' });
@@ -598,7 +599,7 @@ function ConfigFormNew({ onSave, initialConfig, onCancel, cachedZones }) {
     }
 
     // Validate Slack webhook
-    if (formData.slackWebhook && !formData.slackWebhook.startsWith('https://hooks.slack.com/')) {
+    if (formData.slackEnabled && formData.slackWebhook && !formData.slackWebhook.startsWith('https://hooks.slack.com/')) {
       newErrors.slackWebhook = 'Invalid Slack webhook URL';
     }
 
@@ -790,181 +791,237 @@ function ConfigFormNew({ onSave, initialConfig, onCancel, cachedZones }) {
 
   // Render Account IDs Step
   const renderAccountIdsStep = () => (
-    <div className="p-6 space-y-6">
-      {/* API Token Notice */}
-      <div className="bg-blue-50 border-l-4 border-blue-400 p-4">
-        <div className="flex items-start">
-          <Key className="w-5 h-5 text-blue-400 mt-0.5 mr-3 flex-shrink-0" />
-          <div>
-            <h3 className="text-sm font-semibold text-blue-800">Cloudflare API Token Required</h3>
-            <p className="text-xs text-blue-700 mt-1">
-              If you haven't already created an API token as part of the configuration, you can create one at{' '}
-              <a 
-                href="https://dash.cloudflare.com/profile/api-tokens" 
-                target="_blank" 
-                rel="noopener noreferrer"
-                className="underline font-medium hover:text-blue-900"
-              >
-                Cloudflare Dashboard
-              </a>
-              {' '}(use the 'Read all resources' template).
-            </p>
-            <p className="text-xs text-blue-700 mt-2">
-              Then add it as a secret by going to: <strong>Workers and Pages</strong> → <strong>enterprise-usage-dashboard</strong> → <strong>Settings</strong> → <strong>Variables and Secrets</strong> → <strong>Add Secret</strong>
-            </p>
-            <p className="text-xs text-blue-700 mt-2">
-              Secret name: <code className="bg-blue-100 text-blue-900 px-1.5 py-0.5 rounded font-mono">CLOUDFLARE_API_TOKEN</code>
-            </p>
+    <div className="p-6">
+      <div className="max-w-2xl mx-auto space-y-6">
+        {/* API Token Notice */}
+        <div className="bg-blue-50 border-l-4 border-blue-400 p-4">
+          <div className="flex items-start">
+            <Key className="w-5 h-5 text-blue-400 mt-0.5 mr-3 flex-shrink-0" />
+            <div>
+              <h3 className="text-sm font-semibold text-blue-800">Cloudflare API Token Required</h3>
+              <p className="text-xs text-blue-700 mt-1">
+                If you haven't already created an API token as part of the configuration, you can create one at{' '}
+                <a 
+                  href="https://dash.cloudflare.com/profile/api-tokens" 
+                  target="_blank" 
+                  rel="noopener noreferrer"
+                  className="underline font-medium hover:text-blue-900"
+                >
+                  Cloudflare Dashboard
+                </a>
+                {' '}(use the 'Read all resources' template).
+              </p>
+              <p className="text-xs text-blue-700 mt-2">
+                Then add it as a secret by going to: <strong>Workers and Pages</strong> → <strong>enterprise-usage-dashboard</strong> → <strong>Settings</strong> → <strong>Variables and Secrets</strong> → <strong>Add Secret</strong>
+              </p>
+              <p className="text-xs text-blue-700 mt-2">
+                Secret name: <code className="bg-blue-100 text-blue-900 px-1.5 py-0.5 rounded font-mono">CLOUDFLARE_API_TOKEN</code>
+              </p>
+            </div>
           </div>
         </div>
-      </div>
 
-      {/* Account IDs */}
-      <div className="space-y-4">
-        <h3 className="text-lg font-semibold text-gray-900 flex items-center space-x-2">
-          <Key className="w-5 h-5" />
-          <span>Cloudflare Accounts</span>
-        </h3>
-        <p className="text-sm text-gray-600">
-          Configure which Cloudflare accounts to monitor. We'll load your Enterprise zones after saving.
-        </p>
-
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">
-            Account IDs *
-          </label>
-          
-          <div className="space-y-2">
-            {formData.accountIds.map((accountId, index) => (
-              <div key={index} className="flex items-center space-x-2">
-                <input
-                  type="text"
-                  value={accountId}
-                  onChange={(e) => updateAccountId(index, e.target.value)}
-                  className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  placeholder="Account ID"
-                />
-                {formData.accountIds.length > 1 && (
-                  <button
-                    type="button"
-                    onClick={() => removeAccountId(index)}
-                    className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                    title="Remove account"
-                  >
-                    <Trash2 className="w-5 h-5" />
-                  </button>
-                )}
-              </div>
-            ))}
-          </div>
-
-          <button
-            type="button"
-            onClick={addAccountId}
-            className="mt-3 flex items-center space-x-2 px-4 py-2 text-blue-600 border border-blue-600 rounded-lg hover:bg-blue-50 transition-colors"
-          >
-            <Plus className="w-4 h-4" />
-            <span>Add Another Account</span>
-          </button>
-
-          {errors.accountIds && (
-            <p className="text-red-600 text-sm mt-2">{errors.accountIds}</p>
-          )}
-          
-          <div className="mt-2 space-y-1">
-            <p className="text-gray-500 text-xs">
-              Find in your Cloudflare dashboard URL or account settings
-            </p>
-            <p className="text-blue-600 text-xs font-medium">
-              💡 You can add multiple accounts. Your API token must have access to all accounts.
-            </p>
-          </div>
-        </div>
-      </div>
-
-      {/* Slack Notifications */}
-      <div className="border-t border-gray-200 pt-6 space-y-4">
-        <h3 className="text-lg font-semibold text-gray-900 flex items-center space-x-2">
-          <MessageSquare className="w-5 h-5" />
-          <span>Slack Notifications</span>
-        </h3>
-        <p className="text-sm text-gray-600">
-          Add a Slack webhook URL to receive alerts when usage reaches 90% of thresholds
-        </p>
-
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">
-            <MessageSquare className="inline w-4 h-4 mr-1" />
-            Slack Webhook URL (optional)
-          </label>
-          <input
-            type="text"
-            value={formData.slackWebhook}
-            onChange={(e) => setFormData(prev => ({ ...prev, slackWebhook: e.target.value }))}
-            className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
-              errors.slackWebhook ? 'border-red-500' : 'border-gray-300'
-            }`}
-            placeholder="https://hooks.slack.com/services/YOUR/WEBHOOK/URL"
-          />
-          {errors.slackWebhook && (
-            <p className="text-red-600 text-sm mt-1">{errors.slackWebhook}</p>
-          )}
-          <p className="text-xs text-gray-500 mt-1">
-            Get your webhook URL from Slack: Workspace Settings → Apps → Incoming Webhooks
+        {/* Account IDs */}
+        <div className="space-y-4">
+          <h3 className="text-lg font-semibold text-gray-900 flex items-center space-x-2">
+            <Key className="w-5 h-5" />
+            <span>Cloudflare Accounts</span>
+          </h3>
+          <p className="text-sm text-gray-600">
+            Configure which Cloudflare accounts to monitor. We'll load your Enterprise zones after saving.
           </p>
-        </div>
 
-        {formData.slackWebhook && (
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">Alert Frequency</label>
-            <p className="text-xs text-gray-500 mb-2">How often threshold alerts (≥90%) can be sent per product</p>
-            <div className="flex space-x-4">
-              <label className="flex items-center space-x-2 cursor-pointer">
-                <input type="radio" name="alertFrequency" value="monthly" checked={formData.alertFrequency === 'monthly'}
-                  onChange={() => setFormData(prev => ({ ...prev, alertFrequency: 'monthly' }))}
-                  className="w-4 h-4 text-blue-600 border-gray-300 focus:ring-blue-500" />
-                <span className="text-sm text-gray-700">Monthly</span>
-              </label>
-              <label className="flex items-center space-x-2 cursor-pointer">
-                <input type="radio" name="alertFrequency" value="weekly" checked={formData.alertFrequency === 'weekly'}
-                  onChange={() => setFormData(prev => ({ ...prev, alertFrequency: 'weekly' }))}
-                  className="w-4 h-4 text-blue-600 border-gray-300 focus:ring-blue-500" />
-                <span className="text-sm text-gray-700">Weekly</span>
-              </label>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Account IDs *
+            </label>
+            
+            <div className="space-y-2">
+              {formData.accountIds.map((accountId, index) => (
+                <div key={index} className="flex items-center space-x-2">
+                  <input
+                    type="text"
+                    value={accountId}
+                    onChange={(e) => updateAccountId(index, e.target.value)}
+                    className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    placeholder="Account ID"
+                  />
+                  {formData.accountIds.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => removeAccountId(index)}
+                      className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                      title="Remove account"
+                    >
+                      <Trash2 className="w-5 h-5" />
+                    </button>
+                  )}
+                </div>
+              ))}
             </div>
-          </div>
-        )}
-      </div>
 
-      {/* Action Buttons */}
-      <div className="flex items-center justify-between pt-6 pb-4 border-t border-gray-200">
-        <div>
-          {zonesLoaded && (
-            <div className="flex items-center space-x-2 text-green-600 text-sm">
-              <CheckCircle className="w-4 h-4" />
-              <span>{availableZones.length} zones loaded</span>
-            </div>
-          )}
-        </div>
-        <div className="flex items-center space-x-3">
-          {onCancel && (
             <button
               type="button"
-              onClick={onCancel}
-              className="px-6 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors flex items-center space-x-2"
+              onClick={addAccountId}
+              className="mt-3 flex items-center space-x-2 px-4 py-2 text-blue-600 border border-blue-600 rounded-lg hover:bg-blue-50 transition-colors"
             >
-              <X className="w-4 h-4" />
-              <span>Cancel</span>
+              <Plus className="w-4 h-4" />
+              <span>Add Another Account</span>
             </button>
-          )}
+
+            {errors.accountIds && (
+              <p className="text-red-600 text-sm mt-2">{errors.accountIds}</p>
+            )}
+            
+            <div className="mt-2 space-y-1">
+              <p className="text-gray-500 text-xs">
+                Find in your Cloudflare dashboard URL or account settings
+              </p>
+              <p className="text-blue-600 text-xs font-medium">
+                💡 You can add multiple accounts. Your API token must have access to all accounts.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center space-x-3 pt-2">
+            <button
+              type="button"
+              onClick={handleLoadZones}
+              disabled={loadingZones}
+              className="px-5 py-2 bg-slate-600 text-white rounded-lg hover:bg-slate-700 transition-colors flex items-center space-x-2 text-sm disabled:opacity-50"
+            >
+              <RefreshCw className={`w-4 h-4 ${loadingZones ? 'animate-spin' : ''}`} />
+              <span>{loadingZones ? 'Loading Zones...' : 'Save & Load Zones'}</span>
+            </button>
+            {zonesLoaded && (
+              <div className="flex items-center space-x-2 text-green-600 text-sm">
+                <CheckCircle className="w-4 h-4" />
+                <span>{availableZones.length} zones loaded</span>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Action Buttons */}
+        <div className="flex items-center justify-between pt-6 border-t border-gray-200">
+          <div>
+            {onCancel && (
+              <button
+                type="button"
+                onClick={onCancel}
+                className="px-6 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors flex items-center space-x-2"
+              >
+                <X className="w-4 h-4" />
+                <span>Cancel</span>
+              </button>
+            )}
+          </div>
           <button
             type="button"
-            onClick={handleLoadZones}
+            onClick={() => {
+              if (!zonesLoaded) {
+                handleLoadZones();
+              } else {
+                setConfigStep(2);
+              }
+            }}
             disabled={loadingZones}
             className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center space-x-2 shadow-sm disabled:opacity-50"
           >
-            <RefreshCw className={`w-4 h-4 ${loadingZones ? 'animate-spin' : ''}`} />
-            <span>{loadingZones ? 'Loading Zones...' : 'Save & Load Zones'}</span>
+            <span>{zonesLoaded ? 'Next' : 'Save & Continue'}</span>
+            <ChevronRight className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
+  // Render Notifications Step
+  const renderNotificationsStep = () => (
+    <div className="p-6">
+      <div className="max-w-2xl mx-auto space-y-6">
+        <div className="space-y-4">
+          <div className="flex items-start space-x-3">
+            <input
+              type="checkbox"
+              checked={formData.slackEnabled}
+              onChange={(e) => setFormData(prev => ({ ...prev, slackEnabled: e.target.checked, slackWebhook: e.target.checked ? prev.slackWebhook : '' }))}
+              className="w-5 h-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500 mt-0.5"
+            />
+            <div>
+              <h3 className="text-lg font-semibold text-gray-900 flex items-center space-x-2">
+                <Bell className="w-5 h-5" />
+                <span>Slack Notifications</span>
+              </h3>
+              <p className="text-sm text-gray-500 mt-1">
+                Receive alerts when usage reaches 90% of contracted thresholds
+              </p>
+            </div>
+          </div>
+
+          {formData.slackEnabled && (
+            <div className="ml-8 space-y-4 pt-2">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  <MessageSquare className="inline w-4 h-4 mr-1" />
+                  Slack Webhook URL
+                </label>
+                <input
+                  type="text"
+                  value={formData.slackWebhook}
+                  onChange={(e) => setFormData(prev => ({ ...prev, slackWebhook: e.target.value }))}
+                  className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
+                    errors.slackWebhook ? 'border-red-500' : 'border-gray-300'
+                  }`}
+                  placeholder="https://hooks.slack.com/services/YOUR/WEBHOOK/URL"
+                />
+                {errors.slackWebhook && (
+                  <p className="text-red-600 text-sm mt-1">{errors.slackWebhook}</p>
+                )}
+                <p className="text-xs text-gray-500 mt-1">
+                  Get your webhook URL from Slack: Workspace Settings → Apps → Incoming Webhooks
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Alert Frequency</label>
+                <p className="text-xs text-gray-500 mb-2">How often threshold alerts (≥90%) can be sent per product</p>
+                <div className="flex space-x-4">
+                  <label className="flex items-center space-x-2 cursor-pointer">
+                    <input type="radio" name="alertFrequency" value="monthly" checked={formData.alertFrequency === 'monthly'}
+                      onChange={() => setFormData(prev => ({ ...prev, alertFrequency: 'monthly' }))}
+                      className="w-4 h-4 text-blue-600 border-gray-300 focus:ring-blue-500" />
+                    <span className="text-sm text-gray-700">Monthly</span>
+                  </label>
+                  <label className="flex items-center space-x-2 cursor-pointer">
+                    <input type="radio" name="alertFrequency" value="weekly" checked={formData.alertFrequency === 'weekly'}
+                      onChange={() => setFormData(prev => ({ ...prev, alertFrequency: 'weekly' }))}
+                      className="w-4 h-4 text-blue-600 border-gray-300 focus:ring-blue-500" />
+                    <span className="text-sm text-gray-700">Weekly</span>
+                  </label>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Action Buttons */}
+        <div className="flex items-center justify-between pt-6 border-t border-gray-200">
+          <button
+            type="button"
+            onClick={() => setConfigStep(1)}
+            className="px-6 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors flex items-center space-x-2"
+          >
+            <ChevronLeft className="w-4 h-4" />
+            <span>Back</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setConfigStep(3)}
+            className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center space-x-2 shadow-sm"
+          >
+            <span>Next</span>
+            <ChevronRight className="w-4 h-4" />
           </button>
         </div>
       </div>
@@ -1017,10 +1074,10 @@ function ConfigFormNew({ onSave, initialConfig, onCancel, cachedZones }) {
         <div className="flex items-center justify-between px-6 pt-6 pb-4 border-t border-gray-200">
           <button
             type="button"
-            onClick={() => setConfigStep(1)}
+            onClick={() => setConfigStep(2)}
             className="px-6 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors"
           >
-            ← Back to Settings
+            ← Back to Notifications
           </button>
           <div className="flex items-center space-x-3">
             {onCancel && (
@@ -4273,33 +4330,42 @@ function ConfigFormNew({ onSave, initialConfig, onCancel, cachedZones }) {
       <div className="bg-gradient-to-r from-slate-700 to-slate-600 px-6 py-4">
         <h2 className="text-xl font-bold text-white">Dashboard Configuration</h2>
         <p className="text-slate-200 text-sm mt-1">
-          {configStep === 1 
-            ? 'Configure your accounts and notification settings' 
-            : 'Set contracted thresholds for each service'}
+          {configStep === 1 && 'Configure your Cloudflare accounts'}
+          {configStep === 2 && 'Configure notification settings'}
+          {configStep === 3 && 'Set contracted thresholds for each service'}
         </p>
       </div>
 
       {/* Step Indicator */}
       <div className="bg-gray-50 px-6 py-3 border-b border-gray-200">
         <div className="flex items-center justify-center space-x-4">
-          <div className={`flex items-center space-x-2 ${configStep === 1 ? 'text-blue-600 font-semibold' : 'text-gray-500'}`}>
-            <div className={`w-8 h-8 rounded-full flex items-center justify-center ${configStep === 1 ? 'bg-blue-600 text-white' : 'bg-gray-300 text-gray-600'}`}>
-              1
+          <button type="button" onClick={() => zonesLoaded && setConfigStep(1)} className={`flex items-center space-x-2 ${configStep === 1 ? 'text-blue-600 font-semibold' : 'text-gray-500 hover:text-gray-700'}`}>
+            <div className={`w-8 h-8 rounded-full flex items-center justify-center ${configStep === 1 ? 'bg-blue-600 text-white' : configStep > 1 ? 'bg-green-500 text-white' : 'bg-gray-300 text-gray-600'}`}>
+              {configStep > 1 ? <CheckCircle className="w-4 h-4" /> : '1'}
             </div>
-            <span className="hidden sm:inline">Settings</span>
-          </div>
-          <div className="w-16 h-0.5 bg-gray-300"></div>
-          <div className={`flex items-center space-x-2 ${configStep === 2 ? 'text-blue-600 font-semibold' : 'text-gray-500'}`}>
-            <div className={`w-8 h-8 rounded-full flex items-center justify-center ${configStep === 2 ? 'bg-blue-600 text-white' : 'bg-gray-300 text-gray-600'}`}>
-              2
+            <span className="hidden sm:inline">Accounts</span>
+          </button>
+          <div className="w-12 h-0.5 bg-gray-300"></div>
+          <button type="button" onClick={() => zonesLoaded && setConfigStep(2)} className={`flex items-center space-x-2 ${configStep === 2 ? 'text-blue-600 font-semibold' : 'text-gray-500 hover:text-gray-700'}`}>
+            <div className={`w-8 h-8 rounded-full flex items-center justify-center ${configStep === 2 ? 'bg-blue-600 text-white' : configStep > 2 ? 'bg-green-500 text-white' : 'bg-gray-300 text-gray-600'}`}>
+              {configStep > 2 ? <CheckCircle className="w-4 h-4" /> : '2'}
+            </div>
+            <span className="hidden sm:inline">Notifications</span>
+          </button>
+          <div className="w-12 h-0.5 bg-gray-300"></div>
+          <button type="button" onClick={() => zonesLoaded && setConfigStep(3)} className={`flex items-center space-x-2 ${configStep === 3 ? 'text-blue-600 font-semibold' : 'text-gray-500'}`}>
+            <div className={`w-8 h-8 rounded-full flex items-center justify-center ${configStep === 3 ? 'bg-blue-600 text-white' : 'bg-gray-300 text-gray-600'}`}>
+              3
             </div>
             <span className="hidden sm:inline">Service Thresholds</span>
-          </div>
+          </button>
         </div>
       </div>
 
       {/* Content */}
-      {configStep === 1 ? renderAccountIdsStep() : renderServiceThresholdsStep()}
+      {configStep === 1 && renderAccountIdsStep()}
+      {configStep === 2 && renderNotificationsStep()}
+      {configStep === 3 && renderServiceThresholdsStep()}
     </form>
   );
 }
