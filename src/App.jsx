@@ -200,14 +200,12 @@ function App() {
               <div>
                 <h3 className="text-lg font-semibold text-gray-900 mb-3">How it works</h3>
                 <p className="text-gray-700 leading-relaxed mb-3">
-                  The dashboard uses <strong>Cloudflare's GraphQL Analytics API</strong> to query your account's usage data. It can fetch metrics such as:
+                  The dashboard uses <strong>Cloudflare's GraphQL and REST APIs</strong> to query your account's usage data across three product areas:
                 </p>
                 <ul className="list-disc list-inside text-gray-700 space-y-2 ml-4">
-                  <li>Enterprise zone counts</li>
-                  <li>HTTP request volumes</li>
-                  <li>Data transfer</li>
-                  <li>DNS query volumes</li>
-                  <li>And many more products!</li>
+                  <li><strong>Application Services</strong> — Enterprise Zones, HTTP Requests, Data Transfer, DNS, Magic Transit, Bot Management, API Shield, Page Shield, Rate Limiting, Argo, Cache Reserve, Load Balancing, Custom Hostnames, Log Explorer</li>
+                  <li><strong>Cloudflare One</strong> — Zero Trust Seats, WAN</li>
+                  <li><strong>Developer Platform</strong> — Workers & Pages, R2, D1, KV, Stream, Images, Workers AI, Queues, Logs & Traces, Durable Objects, Spectrum</li>
                 </ul>
               </div>
 
@@ -215,18 +213,19 @@ function App() {
               <div>
                 <h3 className="text-lg font-semibold text-gray-900 mb-3">Key Features</h3>
                 <ul className="list-disc list-inside text-gray-700 space-y-2 ml-4">
-                  <li><strong>Real-time Monitoring:</strong> Track current and previous month usage</li>
-                  <li><strong>Threshold Alerts:</strong> Set contracted limits and receive Slack notifications at 90%</li>
-                  <li><strong>Zone Breakdowns:</strong> View per-zone metrics and primary/secondary classifications</li>
-                  <li><strong>Historical Trends:</strong> Monthly usage charts for long-term visibility</li>
+                  <li><strong>Real-time Monitoring:</strong> Track month-to-date usage with utilization bars</li>
+                  <li><strong>Multi-Account Aggregation:</strong> Monitor multiple accounts in a single view</li>
+                  <li><strong>Threshold Alerts:</strong> Set contracted limits; optional Slack notifications</li>
+                  <li><strong>Per-Zone Breakdowns:</strong> View zone-level metrics for applicable products</li>
+                  <li><strong>Historical Trends:</strong> 12-month usage charts with automatic KV snapshots</li>
                 </ul>
               </div>
 
               {/* Blocked Traffic */}
               <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-                <h3 className="text-sm font-semibold text-green-900 mb-2">🛡️ Blocked Traffic Not Charged</h3>
+                <h3 className="text-sm font-semibold text-green-900 mb-2">🛡️ Blocked Traffic Excluded</h3>
                 <p className="text-sm text-green-800 leading-relaxed">
-                  Cloudflare does not charge for traffic blocked by security features (DDoS, WAF, etc.). The <strong>HTTP Requests</strong> and <strong>Data Transfer</strong> metrics shown in this dashboard automatically exclude blocked traffic and reflect only billable/clean traffic that reached your origin or was served from cache.
+                  Cloudflare does not charge for traffic blocked by security features (DDoS, WAF, etc.). The <strong>HTTP Requests</strong> and <strong>Data Transfer</strong> metrics shown in this dashboard automatically exclude blocked traffic and reflect only billable/clean traffic.
                 </p>
               </div>
 
@@ -234,7 +233,7 @@ function App() {
               <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
                 <h3 className="text-sm font-semibold text-blue-900 mb-2">📊 Data Accuracy</h3>
                 <p className="text-sm text-blue-800 leading-relaxed">
-                  This dashboard queries the same GraphQL API that powers your Cloudflare dashboard. While this data provides a good indication of general usage, it relies on sampling. Each metric on the dashboard includes a Confidence Level metric, based on a 95% confidence interval from Cloudflare's adaptive sampling. For billing purposes, always rely on official Cloudflare data and invoices.
+                  This dashboard queries the same GraphQL and REST APIs that power your Cloudflare dashboard. While this data provides a good indication of general usage, some metrics rely on adaptive sampling. Some metrics on the dashboard include a Confidence Level, based on a 95% confidence interval from Cloudflare's adaptive sampling. For billing purposes, always rely on official Cloudflare data and invoices.
                 </p>
               </div>
             </div>

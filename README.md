@@ -11,13 +11,12 @@ This is NOT an official Cloudflare tool. Official billing data from Cloudflare m
 ## Features
 
 - 📊 **Real-time Usage Monitoring**: Track your contracted services:
-  - **Application Services**: Enterprise Zones, HTTP Requests, Data Transfer, DNS, Magic Transit
-  - **Security Add-ons**: Bot Management, API Shield, Page Shield, Advanced Rate Limiting
-  - **Cloudflare One**: Zero Trust Seats, Magic WAN
-  - **Developer Platform**: Workers & Pages, R2 Storage
+  - **Application Services**: Enterprise Zones, HTTP Requests, Data Transfer, DNS, Magic Transit, Bot Management, API Shield, Page Shield, Rate Limiting, Argo, Cache Reserve, Load Balancing, Custom Hostnames, Log Explorer
+  - **Cloudflare One**: Zero Trust Seats, WAN
+  - **Developer Platform**: Workers & Pages, R2, D1, KV, Stream, Images, Workers AI, Queues, Logs & Traces, Durable Objects, Spectrum
 
 - 🛡️ **Blocked Traffic Excluded**:
-Cloudflare does not charge for traffic blocked by security features (DDoS, WAF, etc.). The HTTP Requests and Data Transfer metrics shown in this dashboard automatically exclude blocked traffic and reflect only billable/clean traffic that reached your origin or was served from cache.
+Cloudflare does not charge for traffic blocked by security features (DDoS, WAF, etc.). The HTTP Requests and Data Transfer metrics shown in this dashboard automatically exclude blocked traffic and reflect only billable/clean traffic.
 
 - 📈 **Usage Analytics**:
   - Monthly charts with historical trends (data builds over time)
@@ -167,12 +166,11 @@ Enter your Cloudflare Account ID(s):
 
 Set your contracted limits for **aggregated usage** across all accounts:
 
-- **Application Services**: Enterprise Zones, HTTP Requests, Data Transfer, DNS Queries, Magic Transit (P95 bandwidth)
-- **Security Add-ons**: Bot Management, API Shield, Page Shield, Advanced Rate Limiting
-- **Cloudflare One**: Zero Trust Seats, Magic WAN (P95 bandwidth)
-- **Developer Platform**: Workers & Pages (requests, CPU time), R2 Storage (operations, storage)
+- **Application Services**: Enterprise Zones, HTTP Requests, Data Transfer, DNS Queries, Magic Transit (P95 bandwidth), Bot Management, API Shield, Page Shield, Rate Limiting, Argo, Cache Reserve, Load Balancing, Custom Hostnames, Log Explorer
+- **Cloudflare One**: Zero Trust Seats, WAN (P95 bandwidth)
+- **Developer Platform**: Workers & Pages (requests, CPU time), R2 (operations, storage), D1, KV, Stream, Images, Workers AI, Queues, Logs & Traces, Durable Objects, Spectrum
 
-Account-level products (Magic Transit, Magic WAN, Zero Trust, Workers & Pages, R2) support per-account configuration.
+Account-level products (Magic Transit, WAN, Zero Trust, Workers & Pages, R2, D1, KV, Stream, Images, Workers AI, Queues, Logs & Traces, Durable Objects) support per-account configuration.
 
 ### Slack Notifications (Optional)
 
@@ -196,9 +194,9 @@ The dashboard includes a **Cloudflare Cron Trigger** that automatically checks t
 - **KV Storage**: Configuration, thresholds, and historical data
 - **Monthly snapshots**: Cached for 1 year for faster loading
 - **Alert tracking**: Prevents duplicate notifications
-- **Data source**: GraphQL Analytics API (same API that powers your Cloudflare dashboard)
-- **Sampling**: This dashboard relies on sampled data - for billing purposes, always refer to official Cloudflare data and invoices
-- **Confidence Levels**: Each metric includes a confidence indicator based on a 95% confidence interval from Cloudflare's adaptive sampling. Higher confidence percentages (closer to 100%) indicate more accurate estimates. Hover over the confidence badge to see detailed statistics including sample size and confidence range.
+- **Data source**: GraphQL and REST APIs (same APIs that power your Cloudflare dashboard)
+- **Sampling**: Some metrics rely on adaptive sampling - for billing purposes, always refer to official Cloudflare data and invoices
+- **Confidence Levels**: Some metrics include a confidence indicator based on a 95% confidence interval from Cloudflare's adaptive sampling. Higher confidence percentages (closer to 100%) indicate more accurate estimates. Hover over the confidence badge to see detailed statistics including sample size and confidence range.
 
 ## Troubleshooting
 
