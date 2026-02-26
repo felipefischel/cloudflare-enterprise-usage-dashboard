@@ -1372,6 +1372,72 @@ function ConfigFormNew({ onSave, initialConfig, onCancel, cachedZones }) {
     );
   };
 
+  const getZonesGroupedByAccount = () => {
+    const groups = {};
+    availableZones.forEach(zone => {
+      const accountId = zone.account?.id || 'unknown';
+      if (!groups[accountId]) {
+        groups[accountId] = { name: zone.account?.name || getAccountName(accountId), zones: [] };
+      }
+      groups[accountId].zones.push(zone);
+    });
+    return groups;
+  };
+
+  const renderGroupedZoneSelector = (selectedZones, toggleZoneFn, setZonesFn) => {
+    const groups = getZonesGroupedByAccount();
+    const accountIds = Object.keys(groups);
+    const multiAccount = accountIds.length > 1;
+
+    if (!multiAccount) {
+      return availableZones.map((zone) => (
+        <label key={zone.id} className="flex items-center space-x-3 px-4 py-3 hover:bg-gray-50 cursor-pointer border-b border-gray-200 last:border-b-0">
+          <input type="checkbox" checked={selectedZones.includes(zone.id)} onChange={() => toggleZoneFn(zone.id)}
+            className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500" />
+          <span className="text-sm text-gray-900 font-medium">{zone.name}</span>
+        </label>
+      ));
+    }
+
+    return accountIds.map(accountId => {
+      const group = groups[accountId];
+      const groupZoneIds = group.zones.map(z => z.id);
+      const allSelected = groupZoneIds.every(id => selectedZones.includes(id));
+      const someSelected = groupZoneIds.some(id => selectedZones.includes(id));
+
+      const toggleAccountZones = () => {
+        if (allSelected) {
+          setZonesFn(selectedZones.filter(id => !groupZoneIds.includes(id)));
+        } else {
+          const newZones = [...new Set([...selectedZones, ...groupZoneIds])];
+          setZonesFn(newZones);
+        }
+      };
+
+      return (
+        <div key={accountId}>
+          <div className="flex items-center space-x-3 px-4 py-2 bg-gray-100 border-b border-gray-200 sticky top-0">
+            <input
+              type="checkbox"
+              checked={allSelected}
+              ref={el => { if (el) el.indeterminate = someSelected && !allSelected; }}
+              onChange={toggleAccountZones}
+              className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+            />
+            <span className="text-xs font-semibold text-gray-600 uppercase tracking-wide">{group.name}</span>
+          </div>
+          {group.zones.map(zone => (
+            <label key={zone.id} className="flex items-center space-x-3 px-4 py-3 pl-8 hover:bg-gray-50 cursor-pointer border-b border-gray-200 last:border-b-0">
+              <input type="checkbox" checked={selectedZones.includes(zone.id)} onChange={() => toggleZoneFn(zone.id)}
+                className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500" />
+              <span className="text-sm text-gray-900 font-medium">{zone.name}</span>
+            </label>
+          ))}
+        </div>
+      );
+    });
+  };
+
   const renderAddonZoneConfig = (addonKey, title, thresholdLabel, toggleZoneFn, toggleAllFn) => {
     const appServices = formData.applicationServices;
     const addon = appServices[addonKey];
@@ -1424,13 +1490,7 @@ function ConfigFormNew({ onSave, initialConfig, onCancel, cachedZones }) {
                 </div>
               ) : (
                 <div className="bg-white border border-gray-300 rounded-lg max-h-60 overflow-y-auto">
-                  {availableZones.map((zone) => (
-                    <label key={zone.id} className="flex items-center space-x-3 px-4 py-3 hover:bg-gray-50 cursor-pointer border-b border-gray-200 last:border-b-0">
-                      <input type="checkbox" checked={addon.zones.includes(zone.id)} onChange={() => toggleZoneFn(zone.id)}
-                        className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500" />
-                      <span className="text-sm text-gray-900 font-medium">{zone.name}</span>
-                    </label>
-                  ))}
+                  {renderGroupedZoneSelector(addon.zones, toggleZoneFn, (zones) => setFormData(prev => ({ ...prev, applicationServices: { ...prev.applicationServices, [addonKey]: { ...prev.applicationServices[addonKey], zones } } })))}
                 </div>
               )}
               <p className="text-xs text-gray-500 mt-2">{addon.zones.length} zone{addon.zones.length !== 1 ? 's' : ''} selected</p>
@@ -1724,20 +1784,7 @@ function ConfigFormNew({ onSave, initialConfig, onCancel, cachedZones }) {
                 )}
               </div>
               <div className="max-h-48 overflow-y-auto border border-gray-200 rounded-lg">
-                {availableZones.map((zone) => (
-                  <label
-                    key={zone.id}
-                    className="flex items-center px-3 py-2 hover:bg-gray-50 cursor-pointer border-b border-gray-100 last:border-b-0"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={cr.zones.includes(zone.id)}
-                      onChange={() => toggleCacheReserveZone(zone.id)}
-                      className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
-                    />
-                    <span className="ml-2 text-sm text-gray-700">{zone.name}</span>
-                  </label>
-                ))}
+                {renderGroupedZoneSelector(cr.zones, toggleCacheReserveZone, (zones) => setFormData(prev => ({ ...prev, applicationServices: { ...prev.applicationServices, cacheReserve: { ...prev.applicationServices.cacheReserve, zones } } })))}
               </div>
               {cr.zones.length > 0 && (
                 <p className="text-xs text-gray-500 mt-1">{cr.zones.length} zone(s) selected</p>
@@ -1970,13 +2017,7 @@ function ConfigFormNew({ onSave, initialConfig, onCancel, cachedZones }) {
                 </div>
               ) : (
                 <div className="bg-white border border-gray-300 rounded-lg max-h-60 overflow-y-auto">
-                  {availableZones.map((zone) => (
-                    <label key={zone.id} className="flex items-center space-x-3 px-4 py-3 hover:bg-gray-50 cursor-pointer border-b border-gray-200 last:border-b-0">
-                      <input type="checkbox" checked={spec.zones.includes(zone.id)} onChange={() => toggleSpectrumZone(zone.id)}
-                        className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500" />
-                      <span className="text-sm text-gray-900 font-medium">{zone.name}</span>
-                    </label>
-                  ))}
+                  {renderGroupedZoneSelector(spec.zones, toggleSpectrumZone, (zones) => setFormData(prev => ({ ...prev, networkServices: { ...prev.networkServices, spectrum: { ...prev.networkServices.spectrum, zones } } })))}
                 </div>
               )}
               <p className="text-xs text-gray-500 mt-2">{spec.zones.length} zone{spec.zones.length !== 1 ? 's' : ''} selected</p>
