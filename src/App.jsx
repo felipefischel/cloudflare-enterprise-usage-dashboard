@@ -5,6 +5,7 @@ import { Settings, Info, X, AlertTriangle } from 'lucide-react';
 
 function App() {
   const [isConfigured, setIsConfigured] = useState(false);
+  const [configLoading, setConfigLoading] = useState(true);
   const [showConfig, setShowConfig] = useState(false);
   const [showAbout, setShowAbout] = useState(false);
   const [config, setConfig] = useState(null);
@@ -51,6 +52,8 @@ function App() {
       }
     } catch (error) {
       console.error('Failed to load config:', error);
+    } finally {
+      setConfigLoading(false);
     }
   };
 
@@ -122,7 +125,7 @@ function App() {
 
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {!isConfigured || showConfig ? (
+        {configLoading ? null : !isConfigured || showConfig ? (
           <div className="max-w-6xl mx-auto">
             <ConfigFormNew 
               onSave={handleConfigSave} 
