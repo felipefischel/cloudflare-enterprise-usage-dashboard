@@ -434,9 +434,39 @@ async function fetchAllMetrics(apiKey, accountIds, config, env) {
   const dnsEnabled = config?.applicationServices?.core?.dnsEnabled !== undefined ? config.applicationServices.core.dnsEnabled : coreEnabled;
   const anyCoreEnabled = coreEnabled || trafficEnabled || dnsEnabled;
 
-  if (anyCoreEnabled) {
+  const independentPromises = [];
+
+  if (config?.applicationServices?.botManagement?.enabled && accountIds.length > 0) {
+    const c = config.applicationServices.botManagement;
+    independentPromises.push(Promise.allSettled(accountIds.map(id => fetchBotManagementForAccount(apiKey, id, c, env).then(data => ({ accountId: id, data })))).then(results => ({ key: 'botManagement', cfg: c, results })));
+  }
+  const ztIds = config?.zeroTrust?.seats?.accountIds || []; if (config?.zeroTrust?.seats?.enabled && ztIds.length > 0) { const c = config.zeroTrust.seats; independentPromises.push(Promise.allSettled(ztIds.map(id => fetchZeroTrustSeatsForAccount(apiKey, id, c, env).then(data => ({ accountId: id, data })))).then(results => ({ key: 'zeroTrustSeats', cfg: c, results }))); }
+  const wpIds = config?.developerServices?.workersPages?.accountIds || []; if (config?.developerServices?.workersPages?.enabled && wpIds.length > 0) { const c = config.developerServices.workersPages; independentPromises.push(Promise.allSettled(wpIds.map(id => fetchWorkersPagesForAccount(apiKey, id, c, env).then(data => ({ accountId: id, data })))).then(results => ({ key: 'workersPages', cfg: c, results }))); }
+  const r2Ids = config?.developerServices?.r2Storage?.accountIds || []; if (config?.developerServices?.r2Storage?.enabled && r2Ids.length > 0) { const c = config.developerServices.r2Storage; independentPromises.push(Promise.allSettled(r2Ids.map(id => fetchR2StorageForAccount(apiKey, id, c, env).then(data => ({ accountId: id, data })))).then(results => ({ key: 'r2Storage', cfg: c, results }))); }
+  const d1Ids = config?.developerServices?.d1?.accountIds || []; if (config?.developerServices?.d1?.enabled && d1Ids.length > 0) { const c = config.developerServices.d1; independentPromises.push(Promise.allSettled(d1Ids.map(id => fetchD1ForAccount(apiKey, id, c, env).then(data => ({ accountId: id, data })))).then(results => ({ key: 'd1', cfg: c, results }))); }
+  const kvIds = config?.developerServices?.kv?.accountIds || []; if (config?.developerServices?.kv?.enabled && kvIds.length > 0) { const c = config.developerServices.kv; independentPromises.push(Promise.allSettled(kvIds.map(id => fetchKVForAccount(apiKey, id, c, env).then(data => ({ accountId: id, data })))).then(results => ({ key: 'kv', cfg: c, results }))); }
+  const streamIds = config?.developerServices?.stream?.accountIds || []; if (config?.developerServices?.stream?.enabled && streamIds.length > 0) { const c = config.developerServices.stream; independentPromises.push(Promise.allSettled(streamIds.map(id => fetchStreamForAccount(apiKey, id, c, env).then(data => ({ accountId: id, data })))).then(results => ({ key: 'stream', cfg: c, results }))); }
+  const imgIds = config?.developerServices?.images?.accountIds || []; if (config?.developerServices?.images?.enabled && imgIds.length > 0) { const c = config.developerServices.images; independentPromises.push(Promise.allSettled(imgIds.map(id => fetchImagesForAccount(apiKey, id, c, env).then(data => ({ accountId: id, data })))).then(results => ({ key: 'images', cfg: c, results }))); }
+  const waiIds = config?.developerServices?.workersAI?.accountIds || []; if (config?.developerServices?.workersAI?.enabled && waiIds.length > 0) { const c = config.developerServices.workersAI; independentPromises.push(Promise.allSettled(waiIds.map(id => fetchWorkersAIForAccount(apiKey, id, c, env).then(data => ({ accountId: id, data })))).then(results => ({ key: 'workersAI', cfg: c, results }))); }
+  const qIds = config?.developerServices?.queues?.accountIds || []; if (config?.developerServices?.queues?.enabled && qIds.length > 0) { const c = config.developerServices.queues; independentPromises.push(Promise.allSettled(qIds.map(id => fetchQueuesForAccount(apiKey, id, c, env).then(data => ({ accountId: id, data })))).then(results => ({ key: 'queues', cfg: c, results }))); }
+  const wltIds = config?.developerServices?.workersLogsTraces?.accountIds || []; if (config?.developerServices?.workersLogsTraces?.enabled && wltIds.length > 0) { const c = config.developerServices.workersLogsTraces; independentPromises.push(Promise.allSettled(wltIds.map(id => fetchWorkersLogsTracesForAccount(apiKey, id, c, env).then(data => ({ accountId: id, data })))).then(results => ({ key: 'workersLogsTraces', cfg: c, results }))); }
+  const specZones = config?.networkServices?.spectrum?.zones || []; if (config?.networkServices?.spectrum?.enabled && specZones.length > 0) { const c = config.networkServices.spectrum; independentPromises.push(Promise.allSettled(specZones.map(zoneId => fetchSpectrumForZone(apiKey, zoneId, c, env).then(data => ({ zoneId, data })))).then(results => ({ key: 'spectrum', cfg: c, results }))); }
+  const lbIds = config?.applicationServices?.loadBalancing?.accountIds || []; if (config?.applicationServices?.loadBalancing?.enabled && lbIds.length > 0) { const c = config.applicationServices.loadBalancing; independentPromises.push(Promise.allSettled(lbIds.map(id => fetchLoadBalancingForAccount(apiKey, id, env).then(data => ({ accountId: id, data })))).then(results => ({ key: 'loadBalancing', cfg: c, results }))); }
+  const chIds = config?.applicationServices?.customHostnames?.accountIds || []; if (config?.applicationServices?.customHostnames?.enabled && chIds.length > 0) { const c = config.applicationServices.customHostnames; independentPromises.push(Promise.allSettled(chIds.map(id => fetchCustomHostnamesForAccount(apiKey, id, env).then(data => ({ accountId: id, data })))).then(results => ({ key: 'customHostnames', cfg: c, results }))); }
+  const leIds = config?.applicationServices?.logExplorer?.accountIds || []; if (config?.applicationServices?.logExplorer?.enabled && leIds.length > 0) { const c = config.applicationServices.logExplorer; independentPromises.push(Promise.allSettled(leIds.map(id => fetchLogExplorerForAccount(apiKey, id, env).then(data => ({ accountId: id, data })))).then(results => ({ key: 'logExplorer', cfg: c, results }))); }
+  const doIds = config?.developerServices?.durableObjects?.accountIds || []; if (config?.developerServices?.durableObjects?.enabled && doIds.length > 0) { const c = config.developerServices.durableObjects; independentPromises.push(Promise.allSettled(doIds.map(id => fetchDurableObjectsForAccount(apiKey, id, c, env).then(data => ({ accountId: id, data })))).then(results => ({ key: 'durableObjects', cfg: c, results }))); }
+  const mtIds = config?.networkServices?.magicTransit?.accountIds || []; if (config?.networkServices?.magicTransit?.enabled && mtIds.length > 0) { const c = config.networkServices.magicTransit; independentPromises.push(Promise.allSettled(mtIds.map(id => fetchMagicBandwidthForAccount(apiKey, id, c, env, 'magicTransit').then(data => ({ accountId: id, data })))).then(results => ({ key: 'magicTransit', cfg: c, results }))); }
+  const mwIds = config?.networkServices?.magicWan?.accountIds || []; if (config?.networkServices?.magicWan?.enabled && mwIds.length > 0) { const c = config.networkServices.magicWan; independentPromises.push(Promise.allSettled(mwIds.map(id => fetchMagicBandwidthForAccount(apiKey, id, c, env, 'magicWan').then(data => ({ accountId: id, data })))).then(results => ({ key: 'magicWan', cfg: c, results }))); }
+
+  console.log(`🚀 [Independent] Started ${independentPromises.length} independent product fetches`);
+
+  const corePromise = (async () => {
+    if (!anyCoreEnabled) {
+      console.log('⏭️ App Services Core disabled - skipping');
+      return { successfulMetrics: [], coreMetrics: null, zonesData: null, zonesCount: 0 };
+    }
     const coreStart = Date.now();
-    console.log('📊 [Wave 1] Fetching App Services Core metrics + zones...');
+    console.log('📊 [Core] Fetching App Services Core metrics + zones...');
     const accountFetches = await Promise.allSettled(
       accountIds.map(async accountId => {
         const [metrics, accountName, zones] = await Promise.all([
@@ -448,9 +478,10 @@ async function fetchAllMetrics(apiKey, accountIds, config, env) {
       })
     );
     const successfulFetches = accountFetches.filter(r => r.status === 'fulfilled').map(r => r.value);
-    successfulMetrics = successfulFetches.map(f => f.metrics).filter(Boolean);
-    if (successfulMetrics.length > 0) {
-      coreMetrics = aggregateAccountMetrics(successfulMetrics);
+    const sm = successfulFetches.map(f => f.metrics).filter(Boolean);
+    let cm = null;
+    if (sm.length > 0) {
+      cm = aggregateAccountMetrics(sm);
     } else {
       console.warn('⚠️ Failed to fetch core metrics from any account');
     }
@@ -460,62 +491,47 @@ async function fetchAllMetrics(apiKey, accountIds, config, env) {
       accountNames[accountId] = accountName || accountId;
       zones.forEach(z => allZones.push({ ...z, account: { id: accountId, name: accountNames[accountId] } }));
     });
-    zonesCount = allZones.length;
+    const zc = allZones.length;
     const zoneMonthKey = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`;
     try {
-      await env.CONFIG_KV.put(`monthly-zone-count:${zoneMonthKey}`, JSON.stringify({ count: zonesCount, timestamp: new Date().toISOString() }), { expirationTtl: 31536000 });
+      await env.CONFIG_KV.put(`monthly-zone-count:${zoneMonthKey}`, JSON.stringify({ count: zc, timestamp: new Date().toISOString() }), { expirationTtl: 31536000 });
     } catch (e) { console.error('Failed to store zone count snapshot:', e); }
-    const zonesTimeSeries = await getHistoricalZoneCountData(env, zonesCount);
-    zonesData = { zones: allZones.map(z => ({ id: z.id, name: z.name, account: z.account })), accounts: accountNames, enterprise: zonesCount, zonesTimeSeries };
-    timings.wave1 = Date.now() - coreStart;
-    console.log(`⏱️ Wave 1: ${timings.wave1}ms`);
-  } else {
-    console.log('⏭️ App Services Core disabled - skipping');
-  }
+    const zonesTimeSeries = await getHistoricalZoneCountData(env, zc);
+    const zd = { zones: allZones.map(z => ({ id: z.id, name: z.name, account: z.account })), accounts: accountNames, enterprise: zc, zonesTimeSeries };
+    timings.core = Date.now() - coreStart;
+    console.log(`⏱️ Core: ${timings.core}ms`);
+    return { successfulMetrics: sm, coreMetrics: cm, zonesData: zd, zonesCount: zc };
+  })();
 
-  const wave2Start = Date.now();
-  const wave2Promises = [];
+  const coreResult = await corePromise;
+  successfulMetrics = coreResult.successfulMetrics;
+  coreMetrics = coreResult.coreMetrics;
+  zonesData = coreResult.zonesData;
+  zonesCount = coreResult.zonesCount;
 
-  if (config?.applicationServices?.botManagement?.enabled && accountIds.length > 0) {
-    const c = config.applicationServices.botManagement;
-    wave2Promises.push(Promise.allSettled(accountIds.map(id => fetchBotManagementForAccount(apiKey, id, c, env).then(data => ({ accountId: id, data })))).then(results => ({ key: 'botManagement', cfg: c, results })));
-  }
+  const dependentPromises = [];
   if (successfulMetrics.length > 0) {
-    if (config?.applicationServices?.apiShield?.enabled) { const c = config.applicationServices.apiShield; wave2Promises.push(Promise.allSettled(successfulMetrics.map(a => calculateZoneBasedAddonForAccount(a, c, env, 'api-shield').then(d => ({ accountId: a.accountId, data: d })))).then(results => ({ key: 'apiShield', cfg: c, results }))); }
-    if (config?.applicationServices?.pageShield?.enabled) { const c = config.applicationServices.pageShield; wave2Promises.push(Promise.allSettled(successfulMetrics.map(a => calculateZoneBasedAddonForAccount(a, c, env, 'page-shield').then(d => ({ accountId: a.accountId, data: d })))).then(results => ({ key: 'pageShield', cfg: c, results }))); }
-    if (config?.applicationServices?.advancedRateLimiting?.enabled) { const c = config.applicationServices.advancedRateLimiting; wave2Promises.push(Promise.allSettled(successfulMetrics.map(a => calculateZoneBasedAddonForAccount(a, c, env, 'advanced-rate-limiting').then(d => ({ accountId: a.accountId, data: d })))).then(results => ({ key: 'advancedRateLimiting', cfg: c, results }))); }
-    if (config?.applicationServices?.argo?.enabled) { const c = config.applicationServices.argo; wave2Promises.push(Promise.allSettled(successfulMetrics.map(a => calculateArgoForAccount(a, c, env).then(d => ({ accountId: a.accountId, data: d })))).then(results => ({ key: 'argo', cfg: c, results }))); }
+    if (config?.applicationServices?.apiShield?.enabled) { const c = config.applicationServices.apiShield; dependentPromises.push(Promise.allSettled(successfulMetrics.map(a => calculateZoneBasedAddonForAccount(a, c, env, 'api-shield').then(d => ({ accountId: a.accountId, data: d })))).then(results => ({ key: 'apiShield', cfg: c, results }))); }
+    if (config?.applicationServices?.pageShield?.enabled) { const c = config.applicationServices.pageShield; dependentPromises.push(Promise.allSettled(successfulMetrics.map(a => calculateZoneBasedAddonForAccount(a, c, env, 'page-shield').then(d => ({ accountId: a.accountId, data: d })))).then(results => ({ key: 'pageShield', cfg: c, results }))); }
+    if (config?.applicationServices?.advancedRateLimiting?.enabled) { const c = config.applicationServices.advancedRateLimiting; dependentPromises.push(Promise.allSettled(successfulMetrics.map(a => calculateZoneBasedAddonForAccount(a, c, env, 'advanced-rate-limiting').then(d => ({ accountId: a.accountId, data: d })))).then(results => ({ key: 'advancedRateLimiting', cfg: c, results }))); }
+    if (config?.applicationServices?.argo?.enabled) { const c = config.applicationServices.argo; dependentPromises.push(Promise.allSettled(successfulMetrics.map(a => calculateArgoForAccount(a, c, env).then(d => ({ accountId: a.accountId, data: d })))).then(results => ({ key: 'argo', cfg: c, results }))); }
   }
-  const ztIds = config?.zeroTrust?.seats?.accountIds || []; if (config?.zeroTrust?.seats?.enabled && ztIds.length > 0) { const c = config.zeroTrust.seats; wave2Promises.push(Promise.allSettled(ztIds.map(id => fetchZeroTrustSeatsForAccount(apiKey, id, c, env).then(data => ({ accountId: id, data })))).then(results => ({ key: 'zeroTrustSeats', cfg: c, results }))); }
-  const wpIds = config?.developerServices?.workersPages?.accountIds || []; if (config?.developerServices?.workersPages?.enabled && wpIds.length > 0) { const c = config.developerServices.workersPages; wave2Promises.push(Promise.allSettled(wpIds.map(id => fetchWorkersPagesForAccount(apiKey, id, c, env).then(data => ({ accountId: id, data })))).then(results => ({ key: 'workersPages', cfg: c, results }))); }
-  const r2Ids = config?.developerServices?.r2Storage?.accountIds || []; if (config?.developerServices?.r2Storage?.enabled && r2Ids.length > 0) { const c = config.developerServices.r2Storage; wave2Promises.push(Promise.allSettled(r2Ids.map(id => fetchR2StorageForAccount(apiKey, id, c, env).then(data => ({ accountId: id, data })))).then(results => ({ key: 'r2Storage', cfg: c, results }))); }
-  const d1Ids = config?.developerServices?.d1?.accountIds || []; if (config?.developerServices?.d1?.enabled && d1Ids.length > 0) { const c = config.developerServices.d1; wave2Promises.push(Promise.allSettled(d1Ids.map(id => fetchD1ForAccount(apiKey, id, c, env).then(data => ({ accountId: id, data })))).then(results => ({ key: 'd1', cfg: c, results }))); }
-  const kvIds = config?.developerServices?.kv?.accountIds || []; if (config?.developerServices?.kv?.enabled && kvIds.length > 0) { const c = config.developerServices.kv; wave2Promises.push(Promise.allSettled(kvIds.map(id => fetchKVForAccount(apiKey, id, c, env).then(data => ({ accountId: id, data })))).then(results => ({ key: 'kv', cfg: c, results }))); }
-  const streamIds = config?.developerServices?.stream?.accountIds || []; if (config?.developerServices?.stream?.enabled && streamIds.length > 0) { const c = config.developerServices.stream; wave2Promises.push(Promise.allSettled(streamIds.map(id => fetchStreamForAccount(apiKey, id, c, env).then(data => ({ accountId: id, data })))).then(results => ({ key: 'stream', cfg: c, results }))); }
-  const imgIds = config?.developerServices?.images?.accountIds || []; if (config?.developerServices?.images?.enabled && imgIds.length > 0) { const c = config.developerServices.images; wave2Promises.push(Promise.allSettled(imgIds.map(id => fetchImagesForAccount(apiKey, id, c, env).then(data => ({ accountId: id, data })))).then(results => ({ key: 'images', cfg: c, results }))); }
-  const waiIds = config?.developerServices?.workersAI?.accountIds || []; if (config?.developerServices?.workersAI?.enabled && waiIds.length > 0) { const c = config.developerServices.workersAI; wave2Promises.push(Promise.allSettled(waiIds.map(id => fetchWorkersAIForAccount(apiKey, id, c, env).then(data => ({ accountId: id, data })))).then(results => ({ key: 'workersAI', cfg: c, results }))); }
-  const qIds = config?.developerServices?.queues?.accountIds || []; if (config?.developerServices?.queues?.enabled && qIds.length > 0) { const c = config.developerServices.queues; wave2Promises.push(Promise.allSettled(qIds.map(id => fetchQueuesForAccount(apiKey, id, c, env).then(data => ({ accountId: id, data })))).then(results => ({ key: 'queues', cfg: c, results }))); }
-  const wltIds = config?.developerServices?.workersLogsTraces?.accountIds || []; if (config?.developerServices?.workersLogsTraces?.enabled && wltIds.length > 0) { const c = config.developerServices.workersLogsTraces; wave2Promises.push(Promise.allSettled(wltIds.map(id => fetchWorkersLogsTracesForAccount(apiKey, id, c, env).then(data => ({ accountId: id, data })))).then(results => ({ key: 'workersLogsTraces', cfg: c, results }))); }
-  const specZones = config?.networkServices?.spectrum?.zones || []; if (config?.networkServices?.spectrum?.enabled && specZones.length > 0) { const c = config.networkServices.spectrum; wave2Promises.push(Promise.allSettled(specZones.map(zoneId => fetchSpectrumForZone(apiKey, zoneId, c, env).then(data => ({ zoneId, data })))).then(results => ({ key: 'spectrum', cfg: c, results }))); }
   const crZones = config?.applicationServices?.cacheReserve?.zones || [];
   if (config?.applicationServices?.cacheReserve?.enabled && crZones.length > 0) {
     const c = config.applicationServices.cacheReserve;
     const znMap = {};
     successfulMetrics.forEach(a => (a.zoneBreakdown?.zones || []).forEach(z => { if (z.zoneTag && z.zoneName) znMap[z.zoneTag] = z.zoneName; }));
-    wave2Promises.push(Promise.allSettled(crZones.map(zoneId => fetchCacheReserveForZone(apiKey, zoneId, znMap[zoneId] || zoneId, env))).then(results => ({ key: 'cacheReserve', cfg: c, results })));
+    dependentPromises.push(Promise.allSettled(crZones.map(zoneId => fetchCacheReserveForZone(apiKey, zoneId, znMap[zoneId] || zoneId, env))).then(results => ({ key: 'cacheReserve', cfg: c, results })));
   }
-  const lbIds = config?.applicationServices?.loadBalancing?.accountIds || []; if (config?.applicationServices?.loadBalancing?.enabled && lbIds.length > 0) { const c = config.applicationServices.loadBalancing; wave2Promises.push(Promise.allSettled(lbIds.map(id => fetchLoadBalancingForAccount(apiKey, id, env).then(data => ({ accountId: id, data })))).then(results => ({ key: 'loadBalancing', cfg: c, results }))); }
-  const chIds = config?.applicationServices?.customHostnames?.accountIds || []; if (config?.applicationServices?.customHostnames?.enabled && chIds.length > 0) { const c = config.applicationServices.customHostnames; wave2Promises.push(Promise.allSettled(chIds.map(id => fetchCustomHostnamesForAccount(apiKey, id, env).then(data => ({ accountId: id, data })))).then(results => ({ key: 'customHostnames', cfg: c, results }))); }
-  const leIds = config?.applicationServices?.logExplorer?.accountIds || []; if (config?.applicationServices?.logExplorer?.enabled && leIds.length > 0) { const c = config.applicationServices.logExplorer; wave2Promises.push(Promise.allSettled(leIds.map(id => fetchLogExplorerForAccount(apiKey, id, env).then(data => ({ accountId: id, data })))).then(results => ({ key: 'logExplorer', cfg: c, results }))); }
-  const doIds = config?.developerServices?.durableObjects?.accountIds || []; if (config?.developerServices?.durableObjects?.enabled && doIds.length > 0) { const c = config.developerServices.durableObjects; wave2Promises.push(Promise.allSettled(doIds.map(id => fetchDurableObjectsForAccount(apiKey, id, c, env).then(data => ({ accountId: id, data })))).then(results => ({ key: 'durableObjects', cfg: c, results }))); }
-  const mtIds = config?.networkServices?.magicTransit?.accountIds || []; if (config?.networkServices?.magicTransit?.enabled && mtIds.length > 0) { const c = config.networkServices.magicTransit; wave2Promises.push(Promise.allSettled(mtIds.map(id => fetchMagicBandwidthForAccount(apiKey, id, c, env, 'magicTransit').then(data => ({ accountId: id, data })))).then(results => ({ key: 'magicTransit', cfg: c, results }))); }
-  const mwIds = config?.networkServices?.magicWan?.accountIds || []; if (config?.networkServices?.magicWan?.enabled && mwIds.length > 0) { const c = config.networkServices.magicWan; wave2Promises.push(Promise.allSettled(mwIds.map(id => fetchMagicBandwidthForAccount(apiKey, id, c, env, 'magicWan').then(data => ({ accountId: id, data })))).then(results => ({ key: 'magicWan', cfg: c, results }))); }
 
-  console.log(`🚀 [Wave 2] Executing ${wave2Promises.length} parallel fetches...`);
-  const wave2Results = await Promise.allSettled(wave2Promises);
-  timings.wave2Total = Date.now() - wave2Start;
+  console.log(`🔗 [Dependent] Started ${dependentPromises.length} dependent product fetches`);
+  const [independentResults, dependentResults] = await Promise.all([
+    Promise.allSettled(independentPromises),
+    Promise.allSettled(dependentPromises),
+  ]);
+  const wave2Results = [...independentResults, ...dependentResults];
   timings.total = Date.now() - overallStart;
-  console.log(`⏱️ Wave 2: ${timings.wave2Total}ms | Total: ${timings.total}ms`);
+  console.log(`⏱️ Total: ${timings.total}ms (independent: ${independentPromises.length}, dependent: ${dependentPromises.length})`);
   let botManagementData = null, apiShieldData = null, pageShieldData = null;
   let advancedRateLimitingData = null, argoData = null, zeroTrustSeatsData = null;
   let workersPagesData = null, r2StorageData = null, d1Data = null, kvData = null;
