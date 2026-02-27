@@ -111,9 +111,8 @@ function ConsolidatedCard({
       if (value >= 1e3) return `${cleanNumber(value / 1e3)} GB-days`;
       return `${cleanNumber(value)} MB-days`;
     } else if (icon === 'cr-storage') {
-      if (value >= 1000) return `${cleanNumber(value / 1000)} PB`;
-      if (value >= 1) return `${cleanNumber(value)} TB`;
-      return `${cleanNumber(value * 1000)} GB`;
+      if (value >= 1000) return `${cleanNumber(value / 1000)} TB`;
+      return `${cleanNumber(value)} GB`;
     } else if (icon === 'database') {
       if (value >= 1000) return `${cleanNumber(value / 1000)} TB`;
       return `${cleanNumber(value)} GB`;
