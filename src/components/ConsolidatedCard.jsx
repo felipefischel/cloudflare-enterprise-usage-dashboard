@@ -115,6 +115,7 @@ function ConsolidatedCard({
       if (value >= 1) return `${cleanNumber(value)} TB`;
       return `${cleanNumber(value * 1000)} GB`;
     } else if (icon === 'database') {
+      if (value >= 1000) return `${cleanNumber(value / 1000)} TB`;
       return `${cleanNumber(value)} GB`;
     } else if (icon === 'zones') {
       return `${value.toLocaleString()} zones`;

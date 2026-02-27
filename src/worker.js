@@ -6930,7 +6930,8 @@ async function runScheduledThresholdCheck(env) {
       const r2 = m.r2Storage, cfg = devCfg.r2Storage||{};
       const r2at = cfg.classAOpsThreshold?cfg.classAOpsThreshold*1e6:null;
       const r2bt = cfg.classBOpsThreshold?cfg.classBOpsThreshold*1e6:null;
-      a('r2-storage', 'R2 — Storage', 'Developer Platform', r2.current?.storageGB||0, cfg.storageThreshold, fG(r2.current?.storageGB||0), cfg.storageThreshold?fG(cfg.storageThreshold):'');
+      const r2st = cfg.storageThreshold?cfg.storageThreshold*1000:null;
+      a('r2-storage', 'R2 — Storage', 'Developer Platform', r2.current?.storageGB||0, r2st, fG(r2.current?.storageGB||0), r2st?fG(r2st):'');
       a('r2-classA', 'R2 — Class A Ops', 'Developer Platform', r2.current?.classAOps||0, r2at, fN(r2.current?.classAOps||0), r2at?fN(r2at):'');
       a('r2-classB', 'R2 — Class B Ops', 'Developer Platform', r2.current?.classBOps||0, r2bt, fN(r2.current?.classBOps||0), r2bt?fN(r2bt):'');
     }

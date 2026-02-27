@@ -2164,10 +2164,10 @@ function ConfigFormNew({ onSave, initialConfig, onCancel, cachedZones }) {
                 <p className="text-xs text-gray-500 mt-1">Read operations</p>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Storage (GB)</label>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Storage (TB)</label>
                 <input type="number" value={r2.storageThreshold}
                   onChange={(e) => setFormData(prev => ({ ...prev, developerServices: { ...prev.developerServices, r2Storage: { ...prev.developerServices.r2Storage, storageThreshold: e.target.value } } }))}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent" placeholder="e.g., 100" min="0" />
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent" placeholder="e.g., 1" min="0" step="0.1" />
                 <p className="text-xs text-gray-500 mt-1">Total storage capacity</p>
               </div>
             </div>

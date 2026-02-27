@@ -286,7 +286,8 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
       const r2 = metricsData.r2Storage, cfg = devCfg.r2Storage || {};
       const r2at = cfg.classAOpsThreshold ? cfg.classAOpsThreshold * 1e6 : null;
       const r2bt = cfg.classBOpsThreshold ? cfg.classBOpsThreshold * 1e6 : null;
-      add('r2-storage', 'R2 — Storage', 'Developer Platform', r2.current?.storageGB || 0, cfg.storageThreshold, fmtGB(r2.current?.storageGB || 0), cfg.storageThreshold ? fmtGB(cfg.storageThreshold) : '');
+      const r2st = cfg.storageThreshold ? cfg.storageThreshold * 1000 : null;
+      add('r2-storage', 'R2 — Storage', 'Developer Platform', r2.current?.storageGB || 0, r2st, fmtGB(r2.current?.storageGB || 0), r2st ? fmtGB(r2st) : '');
       add('r2-classA', 'R2 — Class A Ops', 'Developer Platform', r2.current?.classAOps || 0, r2at, fmtNum(r2.current?.classAOps || 0), r2at ? fmtNum(r2at) : '');
       add('r2-classB', 'R2 — Class B Ops', 'Developer Platform', r2.current?.classBOps || 0, r2bt, fmtNum(r2.current?.classBOps || 0), r2bt ? fmtNum(r2bt) : '');
     }
@@ -1806,7 +1807,7 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
             if (gb >= 1) return `${gb.toFixed(2)} GB`;
             return `${(gb * 1000).toFixed(2)} MB`;
           })()}
-          threshold={cr.storageThreshold || null}
+          threshold={cr.storageThreshold ? cr.storageThreshold * 1000 : null}
           percentage={cr.storageThreshold ? (cr.current?.storageGBDays || 0) / (cr.storageThreshold * 1000) * 100 : null}
           icon="cr-storage"
           unit=""
@@ -2627,6 +2628,21 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
     return (
       <div className="space-y-6">
         <ConsolidatedCard
+          title="Total Storage"
+          subtitle="Capacity used"
+          value={r2.current?.storageGB || 0}
+          formatted={formatStorageGB(r2.current?.storageGB || 0)}
+          threshold={r2.storageThreshold ? r2.storageThreshold * 1000 : null}
+          percentage={calculatePercentage(r2.current?.storageGB || 0, r2.storageThreshold ? r2.storageThreshold * 1000 : null)}
+          icon="database"
+          unit=""
+          color="#10b981"
+          timeSeries={r2.timeSeries}
+          dataKey="storageGB"
+          chartFormatter={formatStorageGB}
+          yAxisLabel="Storage (GB)"
+        />
+        <ConsolidatedCard
           title="Class A Operations"
           subtitle="Write/List/Delete"
           value={r2.current?.classAOps || 0}
@@ -2655,21 +2671,6 @@ function Dashboard({ config, zones, setZones, refreshTrigger }) {
           dataKey="classBOps"
           chartFormatter={formatNumber}
           yAxisLabel="Operations"
-        />
-        <ConsolidatedCard
-          title="Total Storage"
-          subtitle="Capacity used"
-          value={r2.current?.storageGB || 0}
-          formatted={formatStorageGB(r2.current?.storageGB || 0)}
-          threshold={r2.storageThreshold || null}
-          percentage={calculatePercentage(r2.current?.storageGB || 0, r2.storageThreshold || null)}
-          icon="database"
-          unit=""
-          color="#10b981"
-          timeSeries={r2.timeSeries}
-          dataKey="storageGB"
-          chartFormatter={formatStorageGB}
-          yAxisLabel="Storage (GB)"
         />
       </div>
     );
