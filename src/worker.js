@@ -2571,24 +2571,41 @@ async function getHistoricalBotManagementData(env, accountId) {
   }
   
   const historicalData = [];
-  
-  // List all Bot Management monthly stats keys for this account
+  const monthDataMap = new Map();
+
+  // List all Bot Management monthly stats keys for this account (new prefix first)
   const listResult = await env.CONFIG_KV.list({ prefix: `${BOT_MONTHLY_STATS_PREFIX}:${accountId}:` });
-  
+
   for (const key of listResult.keys) {
     const data = await env.CONFIG_KV.get(key.name, 'json');
     if (data) {
-      // Extract month from key: {prefix}:{accountId}:YYYY-MM
       const month = key.name.split(':')[2];
-      const [year, monthNum] = month.split('-');
-      const timestamp = new Date(parseInt(year), parseInt(monthNum) - 1, 1).toISOString();
-      
-      historicalData.push({
-        month,
-        timestamp,
-        likelyHuman: data.likelyHuman || 0,
-      });
+      monthDataMap.set(month, { likelyHuman: data.likelyHuman || 0, source: 'new' });
     }
+  }
+
+  // Fallback: List legacy keys and fill in any missing months
+  const legacyListResult = await env.CONFIG_KV.list({ prefix: `monthly-bot-stats:${accountId}:` });
+
+  for (const key of legacyListResult.keys) {
+    const month = key.name.split(':')[2];
+    if (!monthDataMap.has(month)) {
+      const data = await env.CONFIG_KV.get(key.name, 'json');
+      if (data) {
+        monthDataMap.set(month, { likelyHuman: data.likelyHuman || 0, source: 'legacy' });
+      }
+    }
+  }
+
+  // Convert map to sorted array
+  for (const [month, data] of monthDataMap) {
+    const [year, monthNum] = month.split('-');
+    const timestamp = new Date(parseInt(year), parseInt(monthNum) - 1, 1).toISOString();
+    historicalData.push({
+      month,
+      timestamp,
+      likelyHuman: data.likelyHuman,
+    });
   }
   
   // Cache the historical data (6 hour TTL)
@@ -6575,26 +6592,53 @@ async function getHistoricalMonthlyData(env, accountId) {
   }
   
   const historicalData = [];
-  
-  // List all core monthly stats keys for this account
+  const monthDataMap = new Map();
+
+  // List all core monthly stats keys for this account (new prefix first)
   const listResult = await env.CONFIG_KV.list({ prefix: `${CORE_MONTHLY_STATS_PREFIX}:${accountId}:` });
-  
+
   for (const key of listResult.keys) {
     const data = await env.CONFIG_KV.get(key.name, 'json');
     if (data) {
-      // Extract month from key: {prefix}:{accountId}:YYYY-MM
       const month = key.name.split(':')[2];
-      const [year, monthNum] = month.split('-');
-      const timestamp = new Date(parseInt(year), parseInt(monthNum) - 1, 1).toISOString();
-      
-      historicalData.push({
-        month,
-        timestamp,
+      monthDataMap.set(month, {
         requests: data.requests || 0,
         bytes: data.bytes || 0,
         dnsQueries: data.dnsQueries || 0,
+        source: 'new'
       });
     }
+  }
+
+  // Fallback: List legacy keys and fill in any missing months
+  const legacyListResult = await env.CONFIG_KV.list({ prefix: `monthly-stats:${accountId}:` });
+
+  for (const key of legacyListResult.keys) {
+    const month = key.name.split(':')[2];
+    if (!monthDataMap.has(month)) {
+      const data = await env.CONFIG_KV.get(key.name, 'json');
+      if (data) {
+        monthDataMap.set(month, {
+          requests: data.requests || 0,
+          bytes: data.bytes || 0,
+          dnsQueries: data.dnsQueries || 0,
+          source: 'legacy'
+        });
+      }
+    }
+  }
+
+  // Convert map to sorted array
+  for (const [month, data] of monthDataMap) {
+    const [year, monthNum] = month.split('-');
+    const timestamp = new Date(parseInt(year), parseInt(monthNum) - 1, 1).toISOString();
+    historicalData.push({
+      month,
+      timestamp,
+      requests: data.requests,
+      bytes: data.bytes,
+      dnsQueries: data.dnsQueries,
+    });
   }
   
   // Cache the historical data (6 hour TTL)
